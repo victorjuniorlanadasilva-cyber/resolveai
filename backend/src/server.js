@@ -489,6 +489,23 @@ app.post("/api/payments/mercadopago/preference", asyncHandler(async (req, res) =
   }
 }));
 
+app.all("/api/payments/mercadopago/preference", (req, res) => {
+  return res.status(405).json({
+    error: true,
+    message: "Use POST para criar a preferencia de pagamento Mercado Pago."
+  });
+});
+
+app.get("/api/payments/mercadopago/status", (_req, res) => {
+  return res.json({
+    ok: true,
+    route: "/api/payments/mercadopago/preference",
+    method: "POST",
+    accessTokenPresent: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN),
+    publicKeyPresent: Boolean(process.env.MERCADOPAGO_PUBLIC_KEY)
+  });
+});
+
 app.post("/api/payments/demo-approve", asyncHandler(async (req, res) => {
   if (process.env.MERCADOPAGO_ACCESS_TOKEN) return res.status(403).json({ error: "Aprovacao demonstrativa desativada com Mercado Pago configurado." });
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);

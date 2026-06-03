@@ -508,6 +508,21 @@ async function api(req, res) {
         });
       }
     }
+    if (url.pathname === "/api/payments/mercadopago/preference") {
+      return json(res, 405, {
+        error: true,
+        message: "Use POST para criar a preferencia de pagamento Mercado Pago."
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/payments/mercadopago/status") {
+      return json(res, 200, {
+        ok: true,
+        route: "/api/payments/mercadopago/preference",
+        method: "POST",
+        accessTokenPresent: Boolean(ENV.MERCADOPAGO_ACCESS_TOKEN),
+        publicKeyPresent: Boolean(ENV.MERCADOPAGO_PUBLIC_KEY)
+      });
+    }
     if (req.method === "POST" && url.pathname === "/api/payments/demo-approve") {
       if (ENV.MERCADOPAGO_ACCESS_TOKEN) return json(res, 403, { error: "Aprovacao demonstrativa desativada com Mercado Pago configurado." });
       const data = await body(req);
