@@ -14,7 +14,7 @@ const { Pool } = require("pg");
 const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_URL = (process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
 const APP_URL = (process.env.APP_URL || FRONTEND_URL).replace(/\/$/, "");
-const BACKEND_URL = (process.env.BACKEND_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+const BACKEND_URL = (process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const SESSION_SECRET = process.env.SESSION_SECRET || "resolveai-local-session-secret";
 const DEFAULT_ADMIN_HASH = "resolveai-admin-v1:1f479f45af01c5f3aeb2f6855738d30133a5dc45497be51f6c5ab3c12a0de9eb5923596db6b2e7f1282f5315913e244894c24518bfea058e3ce318e377635f72";
 
@@ -159,6 +159,16 @@ function onlyDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
+function mercadoPagoPhone(value) {
+  const digits = onlyDigits(value);
+  if (digits.length < 10) return undefined;
+  const withoutCountry = digits.startsWith("55") && digits.length > 11 ? digits.slice(2) : digits;
+  return {
+    area_code: withoutCountry.slice(0, 2),
+    number: withoutCountry.slice(2)
+  };
+}
+
 function normalizeContact(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -203,6 +213,15 @@ function logMercadoPago(step, details = {}) {
   console.log(`[MERCADO_PAGO] ${step}`, safe);
 }
 
+function mercadoPagoEnvSnapshot() {
+  return {
+    accessTokenPresent: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN),
+    publicKeyPresent: Boolean(process.env.MERCADOPAGO_PUBLIC_KEY),
+    accessTokenLength: process.env.MERCADOPAGO_ACCESS_TOKEN ? process.env.MERCADOPAGO_ACCESS_TOKEN.length : 0,
+    publicKeyLength: process.env.MERCADOPAGO_PUBLIC_KEY ? process.env.MERCADOPAGO_PUBLIC_KEY.length : 0
+  };
+}
+
 async function mercadoPagoRequest(pathname, payload, step, method = "POST") {
   const url = `${mercadoPagoBaseUrl()}${pathname}`;
   logMercadoPago(`${step} request`, { method, url, payload });
@@ -215,7 +234,12 @@ async function mercadoPagoRequest(pathname, payload, step, method = "POST") {
   let data;
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   if (!response.ok) {
-    logMercadoPago(`${step} falhou`, { status: response.status, response: data });
+    logMercadoPago(`${step} falhou`, {
+      status: response.status,
+      statusText: response.statusText,
+      response: data,
+      rawResponse: text
+    });
     const message = data.message || data.error || `Mercado Pago respondeu HTTP ${response.status}`;
     const error = new Error(message);
     error.status = response.status;
@@ -223,6 +247,50 @@ async function mercadoPagoRequest(pathname, payload, step, method = "POST") {
     throw error;
   }
   return data;
+}
+
+function normalizeMercadoPagoMethod(selectedMethod) {
+  const method = String(selectedMethod || "PIX").trim().toUpperCase();
+  if (["PIX", "BANK_TRANSFER"].includes(method)) return "PIX";
+  if (["CREDIT_CARD", "CARD", "CARTAO", "CARTAO_CREDITO"].includes(method)) return "CREDIT_CARD";
+  if (["BOLETO", "TICKET"].includes(method)) return "BOLETO";
+  return "PIX";
+}
+
+function mercadoPagoPaymentMethods(selectedMethod) {
+  const method = normalizeMercadoPagoMethod(selectedMethod);
+  if (method === "PIX") {
+    return {
+      default_payment_method_id: "pix",
+      installments: 1
+    };
+  }
+  if (method === "CREDIT_CARD") {
+    return {
+      excluded_payment_types: [
+        { id: "ticket" },
+        { id: "bank_transfer" },
+        { id: "atm" }
+      ],
+      installments: 6
+    };
+  }
+  if (method === "BOLETO") {
+    return {
+      excluded_payment_types: [
+        { id: "credit_card" },
+        { id: "debit_card" },
+        { id: "bank_transfer" },
+        { id: "atm" }
+      ],
+      installments: 1
+    };
+  }
+  return {
+    excluded_payment_methods: [],
+    excluded_payment_types: [],
+    installments: 6
+  };
 }
 
 function createDemoMercadoPagoPreference(solicitacao) {
@@ -236,8 +304,10 @@ function createDemoMercadoPagoPreference(solicitacao) {
   };
 }
 
-async function createMercadoPagoPreference(solicitacao) {
+async function createMercadoPagoPreference(solicitacao, selectedMethod = "PIX") {
+  const normalizedMethod = normalizeMercadoPagoMethod(selectedMethod);
   if (!process.env.MERCADOPAGO_ACCESS_TOKEN) return createDemoMercadoPagoPreference(solicitacao);
+  const paymentMethods = mercadoPagoPaymentMethods(normalizedMethod);
   const preference = {
     items: [{
       id: "resolveai-prioritario",
@@ -250,18 +320,29 @@ async function createMercadoPagoPreference(solicitacao) {
     payer: {
       name: solicitacao.nome || undefined,
       email: solicitacao.email || undefined,
-      phone: onlyDigits(solicitacao.whatsapp) ? { number: onlyDigits(solicitacao.whatsapp) } : undefined
+      phone: mercadoPagoPhone(solicitacao.whatsapp)
     },
     external_reference: solicitacao.id,
     notification_url: `${BACKEND_URL}/api/webhooks/mercadopago`,
     back_urls: mercadoPagoBackUrls(),
-    payment_methods: {
-      excluded_payment_methods: [],
-      excluded_payment_types: [],
-      installments: 6
-    }
+    metadata: {
+      protocolo: solicitacao.protocolo,
+      selected_payment_method: normalizedMethod
+    },
+    payment_methods: paymentMethods
   };
   if (!isLocalAppUrl(APP_URL)) preference.auto_return = "approved";
+  logMercadoPago("preferencia payload pronto", {
+    selectedMethod: normalizedMethod,
+    solicitacaoId: solicitacao.id,
+    protocolo: solicitacao.protocolo,
+    appUrl: APP_URL,
+    backendUrl: BACKEND_URL,
+    backUrls: preference.back_urls,
+    autoReturn: preference.auto_return || "",
+    env: mercadoPagoEnvSnapshot(),
+    payload: preference
+  });
   return mercadoPagoRequest("/checkout/preferences", preference, "preferencia");
 }
 
@@ -392,18 +473,54 @@ app.patch("/api/solicitacoes/:id", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
+  const selectedMethod = normalizeMercadoPagoMethod(req.body.paymentMethod || "PIX");
+  logMercadoPago("rota pagamento recebida", {
+    selectedMethod,
+    receivedPaymentMethod: req.body.paymentMethod || "",
+    solicitacaoId: req.body.solicitacaoId || "",
+    clientIdPresent: Boolean(req.body.clientId),
+    env: mercadoPagoEnvSnapshot()
+  });
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);
   const item = toClient(result.rows[0]);
   if (!item || item.plano !== "Prioritario") return res.status(404).json({ error: "Solicitacao prioritaria nao encontrada" });
   if (item.clientId && item.clientId !== String(req.body.clientId || "").trim()) return res.status(403).json({ error: "Acesso negado" });
   try {
-    const preference = await createMercadoPagoPreference(item);
+    logMercadoPago("criando checkout", {
+      selectedMethod,
+      solicitacaoId: item.id,
+      protocolo: item.protocolo,
+      env: mercadoPagoEnvSnapshot()
+    });
+    const preference = await createMercadoPagoPreference(item, selectedMethod);
+    logMercadoPago("checkout criado", {
+      selectedMethod,
+      solicitacaoId: item.id,
+      protocolo: item.protocolo,
+      preferenceId: preference.id || "",
+      initPointPresent: Boolean(preference.init_point),
+      sandboxInitPointPresent: Boolean(preference.sandbox_init_point),
+      mercadoPagoResponse: preference
+    });
     await pool.query("update solicitacoes set mercado_pago_preference_id=$1,status_pagamento='aguardando_pagamento' where id=$2", [preference.id || "", item.id]);
     const updated = await pool.query("select * from solicitacoes where id=$1", [item.id]);
     return res.json({ solicitacao: toClient(updated.rows[0]), preference });
   } catch (err) {
-    console.error("[MERCADO_PAGO] erro ao gerar pagamento", { message: err.message, details: err.details });
-    return res.status(err.status || 500).json({ error: true, message: err.message, details: err.details || err.message });
+    console.error("[MERCADO_PAGO] erro ao gerar pagamento", {
+      selectedMethod,
+      solicitacaoId: item.id,
+      protocolo: item.protocolo,
+      accessTokenPresent: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN),
+      publicKeyPresent: Boolean(process.env.MERCADOPAGO_PUBLIC_KEY),
+      message: err.message,
+      status: err.status || 500,
+      mercadoPagoError: err.details || err.message
+    });
+    return res.status(err.status || 500).json({
+      error: true,
+      message: "Nao foi possivel gerar o pagamento agora. Tente novamente.",
+      details: err.details || err.message
+    });
   }
 }));
 
