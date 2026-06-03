@@ -64,6 +64,17 @@ SESSION_SECRET=uma_chave_grande_e_secreta
 
 `FRONTEND_URL` libera CORS para o domínio da Vercel.
 
+Para o deploy atual do ResolveAi, confira estes valores nos paineis:
+
+```env
+FRONTEND_URL=https://resolveai-nine.vercel.app
+APP_URL=https://resolveai-nine.vercel.app
+BACKEND_URL=https://resolveai-2blg.onrender.com
+VITE_API_URL=https://resolveai-2blg.onrender.com
+```
+
+No Render, cadastre tambem `MERCADOPAGO_ACCESS_TOKEN` e `MERCADOPAGO_PUBLIC_KEY` com as credenciais de producao do Mercado Pago. Nao coloque esses valores no codigo.
+
 ## Frontend na Vercel
 
 1. No Vercel, crie um novo projeto pelo mesmo repositório GitHub.
@@ -94,9 +105,9 @@ https://seu-backend.onrender.com/api/webhooks/mercadopago
 As URLs de retorno são montadas com `APP_URL`:
 
 ```text
-${APP_URL}/payment/success
-${APP_URL}/payment/failure
-${APP_URL}/payment/pending
+${APP_URL}/pagamento/sucesso
+${APP_URL}/pagamento/erro
+${APP_URL}/pagamento/pendente
 ```
 
 Em produção, o backend envia `auto_return: "approved"`. Em localhost, ele omite `auto_return`, porque o Mercado Pago não aceita retorno automático com `localhost`.

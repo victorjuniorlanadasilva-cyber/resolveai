@@ -249,50 +249,6 @@ async function mercadoPagoRequest(pathname, payload, step, method = "POST") {
   return data;
 }
 
-function normalizeMercadoPagoMethod(selectedMethod) {
-  const method = String(selectedMethod || "PIX").trim().toUpperCase();
-  if (["PIX", "BANK_TRANSFER"].includes(method)) return "PIX";
-  if (["CREDIT_CARD", "CARD", "CARTAO", "CARTAO_CREDITO"].includes(method)) return "CREDIT_CARD";
-  if (["BOLETO", "TICKET"].includes(method)) return "BOLETO";
-  return "PIX";
-}
-
-function mercadoPagoPaymentMethods(selectedMethod) {
-  const method = normalizeMercadoPagoMethod(selectedMethod);
-  if (method === "PIX") {
-    return {
-      default_payment_method_id: "pix",
-      installments: 1
-    };
-  }
-  if (method === "CREDIT_CARD") {
-    return {
-      excluded_payment_types: [
-        { id: "ticket" },
-        { id: "bank_transfer" },
-        { id: "atm" }
-      ],
-      installments: 6
-    };
-  }
-  if (method === "BOLETO") {
-    return {
-      excluded_payment_types: [
-        { id: "credit_card" },
-        { id: "debit_card" },
-        { id: "bank_transfer" },
-        { id: "atm" }
-      ],
-      installments: 1
-    };
-  }
-  return {
-    excluded_payment_methods: [],
-    excluded_payment_types: [],
-    installments: 6
-  };
-}
-
 async function createMercadoPagoPreference(solicitacao) {
   if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
     const error = new Error("MERCADOPAGO_ACCESS_TOKEN nao configurado no backend.");
@@ -320,6 +276,8 @@ async function createMercadoPagoPreference(solicitacao) {
       protocolo: solicitacao.protocolo
     },
     payment_methods: {
+      excluded_payment_methods: [],
+      excluded_payment_types: [],
       installments: 6
     }
   };
