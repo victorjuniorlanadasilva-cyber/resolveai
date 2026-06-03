@@ -411,6 +411,19 @@ async function api(req, res) {
   const db = readDb();
   try {
     if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/api/routes") {
+      return json(res, 200, {
+        ok: true,
+        server: "server.js",
+        routes: [
+          "GET /api/health",
+          "GET /api/routes",
+          "POST /api/payments/mercadopago/preference",
+          "GET /api/payments/mercadopago/status",
+          "POST /api/webhooks/mercadopago"
+        ]
+      });
+    }
     if (req.method === "GET" && url.pathname === "/api/solicitacoes") {
       const clientId = String(url.searchParams.get("clientId") || "").trim();
       if (!clientId) return json(res, 400, { error: "clientId obrigatorio" });

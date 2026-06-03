@@ -363,6 +363,18 @@ function httpError(status, message) {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+app.get("/api/routes", (_req, res) => res.json({
+  ok: true,
+  server: "backend/src/server.js",
+  routes: [
+    "GET /api/health",
+    "GET /api/routes",
+    "POST /api/payments/mercadopago/preference",
+    "GET /api/payments/mercadopago/status",
+    "POST /api/webhooks/mercadopago"
+  ]
+}));
+
 app.get("/api/solicitacoes", asyncHandler(async (req, res) => {
   const clientId = String(req.query.clientId || "").trim();
   if (!clientId) return res.status(400).json({ error: "clientId obrigatorio" });
