@@ -12,11 +12,19 @@ const path = require("path");
 const { Pool } = require("pg");
 
 const PORT = Number(process.env.PORT || 3000);
-const FRONTEND_URL = (process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
-const APP_URL = (process.env.APP_URL || FRONTEND_URL).replace(/\/$/, "");
-const BACKEND_URL = (process.env.BACKEND_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+const DEFAULT_RENDER_URL = "https://resolveai-2b1g.onrender.com";
+const cleanUrl = (value) => String(value || "").replace(/\/$/, "");
+const renderUrlCandidate = cleanUrl(process.env.RENDER_EXTERNAL_URL || process.env.BACKEND_URL || DEFAULT_RENDER_URL);
+const RENDER_URL = renderUrlCandidate || DEFAULT_RENDER_URL;
+const appUrlCandidate = cleanUrl(process.env.APP_URL || process.env.FRONTEND_URL || RENDER_URL || `http://localhost:${PORT}`);
+const APP_URL = appUrlCandidate || RENDER_URL;
+const frontendUrlCandidate = cleanUrl(process.env.FRONTEND_URL || APP_URL);
+const FRONTEND_URL = frontendUrlCandidate || APP_URL;
+const backendUrlCandidate = cleanUrl(process.env.BACKEND_URL || RENDER_URL || APP_URL);
+const BACKEND_URL = backendUrlCandidate || RENDER_URL;
 const SESSION_SECRET = process.env.SESSION_SECRET || "resolveai-local-session-secret";
 const DEFAULT_ADMIN_HASH = "resolveai-admin-v1:1f479f45af01c5f3aeb2f6855738d30133a5dc45497be51f6c5ab3c12a0de9eb5923596db6b2e7f1282f5315913e244894c24518bfea058e3ce318e377635f72";
+const CLIENT_DIR = path.join(__dirname, "..", "public");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -25,11 +33,13 @@ const pool = new Pool({
 
 const app = express();
 app.set("trust proxy", 1);
-const allowedCorsOrigins = [
-  "https://resolveai-nine.vercel.app",
+const allowedCorsOrigins = Array.from(new Set([
+  APP_URL,
+  BACKEND_URL,
+  RENDER_URL,
   "http://localhost:3000",
   "http://localhost:5173"
-];
+].filter(Boolean)));
 const corsOptions = {
   origin: allowedCorsOrigins,
   credentials: true
@@ -550,6 +560,15 @@ app.patch("/api/admin/solicitacoes/:id", asyncHandler(async (req, res) => {
   const updated = await pool.query("select * from solicitacoes where id=$1", [req.params.id]);
   return res.json(toClient(updated.rows[0]));
 }));
+
+if (fs.existsSync(CLIENT_DIR)) {
+  app.use(express.static(CLIENT_DIR));
+  app.get(/^(?!\/api\/).*/, (_req, res) => {
+    res.sendFile(path.join(CLIENT_DIR, "index.html"));
+  });
+} else {
+  console.warn("[FRONTEND] pasta publica nao encontrada:", CLIENT_DIR);
+}
 
 app.use((err, _req, res, _next) => {
   console.error("[API]", err);

@@ -5,7 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "build": "node --check src/server.js",
+    "build": "node scripts/build-frontend.js && node --check src/server.js",
     "dev": "node src/server.js"
   },
   "dependencies": {

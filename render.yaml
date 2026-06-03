@@ -10,11 +10,11 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: FRONTEND_URL
-        sync: false
+        value: https://resolveai-2b1g.onrender.com
       - key: APP_URL
-        sync: false
+        value: https://resolveai-2b1g.onrender.com
       - key: BACKEND_URL
-        sync: false
+        value: https://resolveai-2b1g.onrender.com
       - key: MERCADOPAGO_ACCESS_TOKEN
         sync: false
       - key: MERCADOPAGO_PUBLIC_KEY

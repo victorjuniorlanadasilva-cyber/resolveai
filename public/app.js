@@ -1,10 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
-const DEFAULT_API_URL = "https://resolveai-2b1g.onrender.com";
 const API_BASE = (
   window.RESOLVEAI_API_URL ||
-  (location.hostname === "localhost" ? "http://localhost:3000" : "") ||
-  (location.hostname.endsWith(".vercel.app") ? DEFAULT_API_URL : "")
+  (location.hostname === "localhost" && location.port !== "3000" ? "http://localhost:3000" : "")
 ).replace(/\/$/, "");
 function apiUrl(path) { return `${API_BASE}${path}`; }
 function apiFetch(path, options = {}) {

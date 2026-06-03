@@ -5,4 +5,5 @@ dist/
 backend/.env
 frontend/.env
 frontend/dist/
+backend/public/
 npm-debug.log*

@@ -1,9 +1,9 @@
 # ResolveAi
 
-Projeto separado para deploy gratuito:
+Projeto configurado para rodar 100% no Render:
 
-- `frontend/`: app estático para Vercel.
-- `backend/`: API Node.js para Render.
+- `backend/`: API Express e servidor do frontend.
+- `frontend/`: codigo-fonte do app estatico copiado para o backend no build.
 - Banco: Supabase PostgreSQL.
 - Repositório: GitHub.
 
@@ -15,11 +15,9 @@ frontend/
   app.js
   styles.css
   assets/
-  scripts/build.js
-  vercel.json
-
 backend/
   src/server.js
+  scripts/build-frontend.js
   sql/schema.sql
   package.json
   .env.example
@@ -35,7 +33,7 @@ backend/
 
 O backend cria as tabelas automaticamente no primeiro start usando `backend/sql/schema.sql`.
 
-## Backend no Render
+## Deploy Unico no Render
 
 1. Suba o projeto para o GitHub.
 2. Entre no Render e crie um `Web Service`.
@@ -53,53 +51,23 @@ Plan: Free
 
 ```env
 DATABASE_URL=postgresql://...
-FRONTEND_URL=https://seu-frontend.vercel.app
-APP_URL=https://seu-frontend.vercel.app
-BACKEND_URL=https://seu-backend.onrender.com
+FRONTEND_URL=https://resolveai-2b1g.onrender.com
+APP_URL=https://resolveai-2b1g.onrender.com
+BACKEND_URL=https://resolveai-2b1g.onrender.com
 MERCADOPAGO_ACCESS_TOKEN=
 MERCADOPAGO_PUBLIC_KEY=
 MERCADOPAGO_WEBHOOK_SECRET=
 SESSION_SECRET=uma_chave_grande_e_secreta
 ```
 
-`FRONTEND_URL` libera CORS para o domínio da Vercel.
-
-Para o deploy atual do ResolveAi, confira estes valores nos paineis:
-
-```env
-FRONTEND_URL=https://resolveai-nine.vercel.app
-APP_URL=https://resolveai-nine.vercel.app
-BACKEND_URL=https://resolveai-2b1g.onrender.com
-VITE_API_URL=https://resolveai-2b1g.onrender.com
-```
-
-No Render, cadastre tambem `MERCADOPAGO_ACCESS_TOKEN` e `MERCADOPAGO_PUBLIC_KEY` com as credenciais de producao do Mercado Pago. Nao coloque esses valores no codigo.
-
-## Frontend na Vercel
-
-1. No Vercel, crie um novo projeto pelo mesmo repositório GitHub.
-2. Configure:
-
-```text
-Root Directory: frontend
-Build Command: npm run build
-Output Directory: dist
-```
-
-3. Configure a variável:
-
-```env
-VITE_API_URL=https://seu-backend.onrender.com
-```
-
-4. Faça deploy.
+O frontend e a API ficam no mesmo dominio. Em producao nao precisa de `VITE_API_URL`; as chamadas usam rotas relativas como `/api/solicitacoes`.
 
 ## Mercado Pago
 
 No painel do Mercado Pago, configure o webhook:
 
 ```text
-https://seu-backend.onrender.com/api/webhooks/mercadopago
+https://resolveai-2b1g.onrender.com/api/webhooks/mercadopago
 ```
 
 As URLs de retorno são montadas com `APP_URL`:
@@ -158,8 +126,8 @@ Antes de enviar:
 
 ```bash
 git add .
-git commit -m "Preparar deploy Vercel Render Supabase"
+git commit -m "Preparar deploy Render Supabase"
 git push
 ```
 
-Depois conecte o mesmo repositório na Vercel e no Render.
+Depois conecte o repositorio no Render.
