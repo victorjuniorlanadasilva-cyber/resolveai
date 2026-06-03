@@ -22,18 +22,14 @@ const pool = new Pool({
 
 const app = express();
 app.set("trust proxy", 1);
+const corsOrigins = [
+  process.env.FRONTEND_URL || "https://resolveai-nine.vercel.app",
+  "https://resolveai-nine.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:5173"
+].filter(Boolean);
 app.use(cors({
-  origin(origin, callback) {
-    const allowed = new Set([
-      FRONTEND_URL,
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:5173"
-    ]);
-    if (!origin || allowed.has(origin)) return callback(null, true);
-    return callback(new Error(`Origem nao permitida pelo CORS: ${origin}`));
-  },
+  origin: corsOrigins,
   credentials: true
 }));
 app.use(express.json({ limit: "1mb" }));
