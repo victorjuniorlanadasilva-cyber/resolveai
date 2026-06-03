@@ -479,14 +479,6 @@ app.post("/api/payments/mercadopago/preference", asyncHandler(async (req, res) =
   }
 }));
 
-app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
-  const item = await loadPriorityPaymentRequest(req);
-  const preference = await createMercadoPagoPreference(item);
-  await pool.query("update solicitacoes set mercado_pago_preference_id=$1,status_pagamento='aguardando_pagamento' where id=$2", [preference.id || "", item.id]);
-  const updated = await pool.query("select * from solicitacoes where id=$1", [item.id]);
-  return res.json({ solicitacao: toClient(updated.rows[0]), preference });
-}));
-
 app.post("/api/payments/demo-approve", asyncHandler(async (req, res) => {
   if (process.env.MERCADOPAGO_ACCESS_TOKEN) return res.status(403).json({ error: "Aprovacao demonstrativa desativada com Mercado Pago configurado." });
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);

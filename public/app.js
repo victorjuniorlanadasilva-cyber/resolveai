@@ -1,5 +1,17 @@
 const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
+const DEFAULT_API_URL = "https://resolveai-2blg.onrender.com";
+const API_BASE = (window.RESOLVEAI_API_URL || (location.hostname === "localhost" ? "http://localhost:3000" : DEFAULT_API_URL)).replace(/\/$/, "");
+function apiUrl(path) { return `${API_BASE}${path}`; }
+function apiFetch(path, options = {}) {
+  return fetch(apiUrl(path), {
+    credentials: "include",
+    ...options,
+    headers: {
+      ...(options.headers || {})
+    }
+  });
+}
 const categories = [
   ["❤️", "Amor e Relacionamentos"], ["🔮", "Espiritualidade"], ["💼", "Trabalho e Emprego"],
   ["💰", "Finanças"], ["🏢", "Negócios"], ["🍽️", "Restaurantes"], ["📚", "Estudos"],
@@ -86,72 +98,46 @@ async function payment() {
   }
   phone(`${step("Pagamento")}
     <section class="payment-card details">
-      <p class="screen-copy"><strong>Você escolheu o atendimento prioritário.</strong><br>Faça o pagamento para sua solicitação ser processada.</p>
+      <h2 class="screen-title">Atendimento Prioritário</h2>
+      <p class="screen-copy">Receba a proposta de solução em até 2 horas.</p>
       <div class="price">R$ 9,99</div>
-      <div class="pay-tabs"><button class="active" onclick="payMode('PIX')">PIX</button><button onclick="payMode('CREDIT_CARD')">Cartão</button><button onclick="payMode('BOLETO')">Boleto</button></div>
-      <div id="payBox"></div>
+      <button class="btn gold" id="mercadoPagoButton" onclick="requestMercadoPagoPreference()">Pagar com Mercado Pago</button>
+      <div id="payError"></div>
     </section>
-    <div class="bottom"><button class="btn" onclick="continuePayment()">Continuar</button><div class="progress" style="--p:64%"><span></span></div></div>
+    <div class="progress" style="--p:64%"><span></span></div>
   `);
-  payMode(state.paymentMethod || "PIX");
 }
-async function payMode(mode) {
-  state.paymentMethod = mode; state.paymentGenerated = false; state.paymentError = ""; saveState();
-  document.querySelectorAll(".pay-tabs button").forEach((b) => b.classList.toggle("active", b.textContent.includes(mode === "PIX" ? "PIX" : mode === "BOLETO" ? "Boleto" : "Cartão")));
-  const box = $("#payBox");
-  if (!box) return;
-  if (mode === "PIX") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout com PIX disponível...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("PIX");
-  }
-  if (mode === "CREDIT_CARD") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout seguro para cartão...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("CREDIT_CARD");
-  }
-  if (mode === "BOLETO") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout com boleto, se disponível...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("BOLETO");
-  }
+function paymentFallback(message = "Nao foi possivel gerar o pagamento agora. Tente novamente.") {
+  const target = $("#payError");
+  if (target) target.innerHTML = message ? `<div class="notice">${message}</div>` : "";
 }
-function paymentFallback(message = "Não foi possível gerar o pagamento agora. Tente novamente.") {
-  const target = $("#payError") || $("#payBox");
-  if (target) target.innerHTML = `<div class="notice">${message}</div>`;
-}
-async function requestMercadoPagoPayment(mode) {
+async function requestMercadoPagoPreference() {
   if (!state.tempRequest) return;
+  const button = $("#mercadoPagoButton");
   try {
-    const res = await fetch("/api/payments/mercadopago", {
+    if (button) { button.disabled = true; button.textContent = "Abrindo Mercado Pago..."; }
+    paymentFallback("");
+    const res = await apiFetch("/api/payments/mercadopago/preference", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id, paymentMethod: mode })
+      body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id })
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || "Não foi possível gerar o pagamento agora. Tente novamente.");
-    state.paymentGenerated = true;
-    state.paymentError = "";
-    state.paymentPreference = data.preference;
-    state.tempRequest = data.solicitacao;
+    if (!res.ok) throw new Error(data.message || "Nao foi possivel gerar o pagamento agora. Tente novamente.");
+    if (!data.init_point) throw new Error("Nao foi possivel abrir o Mercado Pago agora. Tente novamente.");
+    state.paymentPreferenceId = data.preference_id || "";
     saveState();
-    const preference = data.preference || {};
-    const checkoutUrl = preference.init_point || preference.sandbox_init_point || "#";
-    $("#payBox").innerHTML = `<p class="screen-copy">Pagamento gerado pelo Mercado Pago.</p><a class="btn secondary" href="${checkoutUrl}" target="_blank" rel="noopener">Abrir Mercado Pago</a><p class="subtle">No checkout você poderá escolher PIX, cartão ou boleto quando estiver disponível.</p>`;
+    window.location.href = data.init_point;
   } catch (err) {
-    state.paymentGenerated = false;
     state.paymentError = err.message;
     saveState();
-    paymentFallback(err.message || "Não foi possível gerar o pagamento agora. Tente novamente.");
+    paymentFallback(err.message || "Nao foi possivel gerar o pagamento agora. Tente novamente.");
+    if (button) { button.disabled = false; button.textContent = "Pagar com Mercado Pago"; }
   }
-}
-async function continuePayment() {
-  if (!state.paymentGenerated) return paymentFallback("Não foi possível gerar o pagamento agora. Tente novamente.");
-  if (state.paymentPreference?.status !== "demo") {
-    return paymentFallback("Finalize o pagamento no Mercado Pago. Assim que for aprovado, sua solicitação será liberada como prioritária.");
-  }
-  await approveDemoPayment();
 }
 async function approveDemoPayment() {
   if (state.tempRequest) {
-    const res = await fetch("/api/payments/demo-approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id }) });
+    const res = await apiFetch("/api/payments/demo-approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id }) });
     if (res.ok) state.tempRequest = await res.json();
   }
   state.pagamentoAprovado = true; saveState(); render("channel");
@@ -182,7 +168,7 @@ function about() {
 
 async function createRequest(temporary = false) {
   const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente Prioritario", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "" };
-  const res = await fetch("/api/solicitacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const res = await apiFetch("/api/solicitacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!res.ok) { alert("Não foi possível criar a solicitação."); return null; }
   return res.json();
 }
@@ -192,12 +178,12 @@ async function submitClient() {
   if (state.canalResposta === "E-mail" && !state.email) return alert("E-mail obrigatório para este canal.");
   let item = state.tempRequest;
   if (item) {
-    const res = await fetch(`/api/solicitacoes/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), nome: state.nome, cidade: state.cidade, whatsapp: state.whatsapp || "", email: state.email || "", canalResposta: state.canalResposta }) });
+    const res = await apiFetch(`/api/solicitacoes/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), nome: state.nome, cidade: state.cidade, whatsapp: state.whatsapp || "", email: state.email || "", canalResposta: state.canalResposta }) });
     if (res.ok) item = await res.json();
   } else item = await createRequest();
   if (!item) return;
   if (state.tempRequest) {
-    const res = await fetch(`/api/solicitacoes/${encodeURIComponent(item.protocolo)}?clientId=${encodeURIComponent(getClientId())}`);
+    const res = await apiFetch(`/api/solicitacoes/${encodeURIComponent(item.protocolo)}?clientId=${encodeURIComponent(getClientId())}`);
     item = await res.json();
   }
   state.last = { ...item, nome: state.nome, cidade: state.cidade, whatsapp: state.whatsapp, email: state.email, canalResposta: state.canalResposta };
@@ -219,7 +205,7 @@ function confirm() {
 function row(a, b) { return `<div class="detail-row"><span>${a}</span><strong>${b || "-"}</strong></div>`; }
 
 async function track() {
-  const res = await fetch(`/api/solicitacoes?clientId=${encodeURIComponent(getClientId())}`);
+  const res = await apiFetch(`/api/solicitacoes?clientId=${encodeURIComponent(getClientId())}`);
   const items = res.ok ? await res.json() : [];
   phone(`${step("8. Acompanhar solicitação")}
     <h2 class="screen-title">Acompanhar sua solicitação</h2>
@@ -256,7 +242,7 @@ async function recoverRequest() {
     if (result) result.innerHTML = `<div class="notice">Informe protocolo e WhatsApp ou e-mail.</div>`;
     return;
   }
-  const res = await fetch("/api/solicitacoes/recuperar", {
+  const res = await apiFetch("/api/solicitacoes/recuperar", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clientId: getClientId(), protocolo, contato })
@@ -273,6 +259,11 @@ async function recoverRequest() {
 }
 
 function paymentReturn(kind) {
+  if (kind === "success") {
+    state.pagamentoAprovado = true;
+    state.plano = "Prioritario";
+    saveState();
+  }
   const config = {
     success: {
       pill: "Pagamento aprovado",
@@ -308,13 +299,13 @@ function paymentReturn(kind) {
       <h2 class="screen-title">${config.title}</h2>
       <p class="screen-copy">${config.text}</p>
     </div>
-    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : "render('track')"}">${config.action}</button></div>
+    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : kind === "success" ? "render('channel')" : "render('track')"}">${kind === "success" ? "Continuar" : config.action}</button></div>
   `);
 }
 
 async function adminInit() {
   app.className = "admin-app";
-  const me = await fetch("/api/admin/me");
+  const me = await apiFetch("/api/admin/me");
   if (!me.ok) return adminLogin();
   await loadAdmin("dashboard");
 }
@@ -323,12 +314,12 @@ function adminLogin() {
   app.innerHTML = `<section class="login-card"><div class="admin-logo">Resolve<span class="accent">Ai</span></div><h1>Painel Administrativo</h1><p class="subtle">Acesse para analisar solicitações e enviar respostas.</p><div class="form"><label>E-mail<input id="email" value="victorjuniorlanadasilva@gmail.com"></label><label>Senha<input id="senha" type="password"></label><div class="error" id="err"></div><button class="btn" onclick="loginAdmin()">Entrar</button></div></section>`;
 }
 async function loginAdmin() {
-  const res = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: $("#email").value, senha: $("#senha").value }) });
+  const res = await apiFetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: $("#email").value, senha: $("#senha").value }) });
   if (!res.ok) return $("#err").textContent = "E-mail ou senha inválidos.";
   loadAdmin("dashboard");
 }
 async function loadAdmin(view) {
-  const res = await fetch("/api/admin/solicitacoes");
+  const res = await apiFetch("/api/admin/solicitacoes");
   adminItems = await res.json();
   app.className = "admin-app";
   app.innerHTML = `<div class="admin-layout"><aside class="sidebar"><div class="admin-logo">Resolve<span class="accent">Ai</span></div><button class="nav-btn ${view==="dashboard"?"active":""}" onclick="loadAdmin('dashboard')">Dashboard</button><button class="nav-btn ${view==="requests"?"active":""}" onclick="loadAdmin('requests')">Solicitações</button><button class="nav-btn ${view==="password"?"active":""}" onclick="loadAdmin('password')">Trocar senha</button><button class="nav-btn" onclick="logoutAdmin()">Sair</button></aside><main class="admin-main" id="adminMain"></main></div>`;
@@ -392,7 +383,7 @@ function adminDetail(id) {
   $("#adminMain").innerHTML = `<div class="admin-head"><h1>${selectedAdmin.protocolo}</h1><button class="btn secondary" onclick="adminRequests()">Voltar</button></div><div class="detail-grid">${["nome","cidade","whatsapp","email","categoria","canalResposta","plano","status"].map(k => metric(k, selectedAdmin[k] || "-")).join("")}</div><h2 class="section-title">Problema completo</h2><section class="info-card details"><p>${selectedAdmin.problema}</p></section><h2 class="section-title">Resposta do administrador</h2><textarea class="admin-textarea" id="resp">${selectedAdmin.respostaAdmin || ""}</textarea><div class="actions"><button class="btn" onclick="saveAnswer()">Salvar Resposta</button><button class="btn secondary" onclick="setStatus('Respondido')">Marcar como Respondido</button><button class="btn secondary" onclick="setStatus('Cancelado')">Cancelar Solicitação</button><button class="btn secondary" onclick="adminRequests()">Voltar</button></div>`;
 }
 async function patchSelected(data) {
-  const res = await fetch(`/api/admin/solicitacoes/${selectedAdmin.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+  const res = await apiFetch(`/api/admin/solicitacoes/${selectedAdmin.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
   selectedAdmin = await res.json();
   await loadAdmin("requests");
 }
@@ -402,18 +393,18 @@ function adminPassword() {
   $("#adminMain").innerHTML = `<div class="admin-head"><h1>Trocar senha</h1></div><div class="form" style="max-width:460px"><label>Senha atual<input id="old" type="password"></label><label>Nova senha<input id="new" type="password"></label><div class="error" id="passMsg"></div><button class="btn" onclick="changePass()">Alterar senha</button></div>`;
 }
 async function changePass() {
-  const res = await fetch("/api/admin/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ senhaAtual: $("#old").value, novaSenha: $("#new").value }) });
+  const res = await apiFetch("/api/admin/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ senhaAtual: $("#old").value, novaSenha: $("#new").value }) });
   $("#passMsg").textContent = res.ok ? "Senha alterada com sucesso." : (await res.json()).error;
 }
-async function logoutAdmin() { await fetch("/api/admin/logout", { method: "POST" }); adminLogin(); }
+async function logoutAdmin() { await apiFetch("/api/admin/logout", { method: "POST" }); adminLogin(); }
 
 if (location.pathname.startsWith("/admin")) {
   adminInit();
-} else if (location.pathname === "/payment/success") {
+} else if (location.pathname === "/pagamento/sucesso") {
   paymentReturn("success");
-} else if (location.pathname === "/payment/failure") {
+} else if (location.pathname === "/pagamento/erro") {
   paymentReturn("failure");
-} else if (location.pathname === "/payment/pending") {
+} else if (location.pathname === "/pagamento/pendente") {
   paymentReturn("pending");
 } else {
   render(state.screen || "welcome");

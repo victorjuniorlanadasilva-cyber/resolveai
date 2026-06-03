@@ -219,9 +219,9 @@ function appBaseUrl() {
 function mercadoPagoBackUrls() {
   const baseUrl = appBaseUrl();
   const backUrls = {
-    success: `${baseUrl}/payment/success`,
-    failure: `${baseUrl}/payment/failure`,
-    pending: `${baseUrl}/payment/pending`
+    success: `${baseUrl}/pagamento/sucesso`,
+    failure: `${baseUrl}/pagamento/erro`,
+    pending: `${baseUrl}/pagamento/pendente`
   };
   if (!backUrls.success || !backUrls.failure || !backUrls.pending) {
     const error = new Error("Nao foi possivel criar checkout sem back_urls completos.");
@@ -480,7 +480,7 @@ async function api(req, res) {
       writeDb(db);
       return json(res, 200, item);
     }
-    if (req.method === "POST" && url.pathname === "/api/payments/mercadopago") {
+    if (req.method === "POST" && url.pathname === "/api/payments/mercadopago/preference") {
       const data = await body(req);
       const item = db.solicitacoes.find((s) => s.id === data.solicitacaoId);
       if (!item || item.plano !== "Prioritario") return json(res, 404, { error: "Solicitacao prioritaria nao encontrada" });
@@ -490,7 +490,8 @@ async function api(req, res) {
         item.mercadoPagoPreferenceId = preference.id || item.mercadoPagoPreferenceId || "";
         item.statusPagamento = "aguardando_pagamento";
         writeDb(db);
-        return json(res, 200, { solicitacao: item, preference });
+        const initPoint = preference.init_point || preference.sandbox_init_point || "";
+        return json(res, 200, { init_point: initPoint, preference_id: preference.id || "" });
       } catch (err) {
         const details = err.details || err.message || "Erro sem detalhes retornados.";
         console.error("[MERCADO_PAGO] erro ao gerar pagamento", {

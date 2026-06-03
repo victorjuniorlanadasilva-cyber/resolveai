@@ -316,31 +316,6 @@ input, select {
   padding: 14px;
   line-height: 1.45;
 }
-.pay-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.pay-tabs button {
-  min-height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: white;
-  font-weight: 800;
-}
-.pay-tabs .active { color: white; background: var(--green); border-color: var(--green); }
-.qr {
-  width: 210px;
-  height: 210px;
-  margin: 8px auto 16px;
-  background:
-    linear-gradient(90deg, #111 10px, transparent 10px) 0 0 / 20px 20px,
-    linear-gradient(#111 10px, transparent 10px) 0 0 / 20px 20px,
-    #fff;
-  border: 12px solid white;
-  outline: 1px solid var(--line);
-}
 .copy-line {
   display: grid;
   grid-template-columns: 1fr auto;
