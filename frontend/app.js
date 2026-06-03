@@ -97,68 +97,42 @@ async function payment() {
   }
   phone(`${step("Pagamento")}
     <section class="payment-card details">
-      <p class="screen-copy"><strong>Você escolheu o atendimento prioritário.</strong><br>Faça o pagamento para sua solicitação ser processada.</p>
+      <h2 class="screen-title">Atendimento Prioritário</h2>
+      <p class="screen-copy">Receba a proposta de solução em até 2 horas.</p>
       <div class="price">R$ 9,99</div>
-      <div class="pay-tabs"><button class="active" onclick="payMode('PIX')">PIX</button><button onclick="payMode('CREDIT_CARD')">Cartão</button><button onclick="payMode('BOLETO')">Boleto</button></div>
-      <div id="payBox"></div>
+      <button class="btn gold" id="mercadoPagoButton" onclick="requestMercadoPagoPreference()">Pagar com Mercado Pago</button>
+      <div id="payError"></div>
     </section>
-    <div class="bottom"><button class="btn" onclick="continuePayment()">Continuar</button><div class="progress" style="--p:64%"><span></span></div></div>
+    <div class="progress" style="--p:64%"><span></span></div>
   `);
-  payMode(state.paymentMethod || "PIX");
 }
-async function payMode(mode) {
-  state.paymentMethod = mode; state.paymentGenerated = false; state.paymentError = ""; saveState();
-  document.querySelectorAll(".pay-tabs button").forEach((b) => b.classList.toggle("active", b.textContent.includes(mode === "PIX" ? "PIX" : mode === "BOLETO" ? "Boleto" : "Cartão")));
-  const box = $("#payBox");
-  if (!box) return;
-  if (mode === "PIX") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout com PIX disponível...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("PIX");
-  }
-  if (mode === "CREDIT_CARD") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout seguro para cartão...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("CREDIT_CARD");
-  }
-  if (mode === "BOLETO") {
-    box.innerHTML = `<p class="screen-copy">Gerando checkout com boleto, se disponível...</p><div id="payError"></div>`;
-    await requestMercadoPagoPayment("BOLETO");
-  }
+function paymentFallback(message = "Nao foi possivel gerar o pagamento agora. Tente novamente.") {
+  const target = $("#payError");
+  if (target) target.innerHTML = message ? `<div class="notice">${message}</div>` : "";
 }
-function paymentFallback(message = "Não foi possível gerar o pagamento agora. Tente novamente.") {
-  const target = $("#payError") || $("#payBox");
-  if (target) target.innerHTML = `<div class="notice">${message}</div>`;
-}
-async function requestMercadoPagoPayment(mode) {
+async function requestMercadoPagoPreference() {
   if (!state.tempRequest) return;
+  const button = $("#mercadoPagoButton");
   try {
-    const res = await apiFetch("/api/payments/mercadopago", {
+    if (button) { button.disabled = true; button.textContent = "Abrindo Mercado Pago..."; }
+    paymentFallback("");
+    const res = await apiFetch("/api/payments/mercadopago/preference", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id, paymentMethod: mode })
+      body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id })
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || "Não foi possível gerar o pagamento agora. Tente novamente.");
-    state.paymentGenerated = true;
-    state.paymentError = "";
-    state.paymentPreference = data.preference;
-    state.tempRequest = data.solicitacao;
+    if (!res.ok) throw new Error(data.message || "Nao foi possivel gerar o pagamento agora. Tente novamente.");
+    if (!data.init_point) throw new Error("Nao foi possivel abrir o Mercado Pago agora. Tente novamente.");
+    state.paymentPreferenceId = data.preference_id || "";
     saveState();
-    const preference = data.preference || {};
-    const checkoutUrl = preference.init_point || preference.sandbox_init_point || "#";
-    $("#payBox").innerHTML = `<p class="screen-copy">Pagamento gerado pelo Mercado Pago.</p><a class="btn secondary" href="${checkoutUrl}" target="_blank" rel="noopener">Abrir Mercado Pago</a><p class="subtle">No checkout você poderá escolher PIX, cartão ou boleto quando estiver disponível.</p>`;
+    window.location.href = data.init_point;
   } catch (err) {
-    state.paymentGenerated = false;
     state.paymentError = err.message;
     saveState();
-    paymentFallback(err.message || "Não foi possível gerar o pagamento agora. Tente novamente.");
+    paymentFallback(err.message || "Nao foi possivel gerar o pagamento agora. Tente novamente.");
+    if (button) { button.disabled = false; button.textContent = "Pagar com Mercado Pago"; }
   }
-}
-async function continuePayment() {
-  if (!state.paymentGenerated) return paymentFallback("Não foi possível gerar o pagamento agora. Tente novamente.");
-  if (state.paymentPreference?.status !== "demo") {
-    return paymentFallback("Finalize o pagamento no Mercado Pago. Assim que for aprovado, sua solicitação será liberada como prioritária.");
-  }
-  await approveDemoPayment();
 }
 async function approveDemoPayment() {
   if (state.tempRequest) {
@@ -284,6 +258,11 @@ async function recoverRequest() {
 }
 
 function paymentReturn(kind) {
+  if (kind === "success") {
+    state.pagamentoAprovado = true;
+    state.plano = "Prioritario";
+    saveState();
+  }
   const config = {
     success: {
       pill: "Pagamento aprovado",
@@ -319,7 +298,7 @@ function paymentReturn(kind) {
       <h2 class="screen-title">${config.title}</h2>
       <p class="screen-copy">${config.text}</p>
     </div>
-    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : "render('track')"}">${config.action}</button></div>
+    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : kind === "success" ? "render('channel')" : "render('track')"}">${kind === "success" ? "Continuar" : config.action}</button></div>
   `);
 }
 
@@ -420,11 +399,11 @@ async function logoutAdmin() { await apiFetch("/api/admin/logout", { method: "PO
 
 if (location.pathname.startsWith("/admin")) {
   adminInit();
-} else if (location.pathname === "/payment/success") {
+} else if (location.pathname === "/pagamento/sucesso") {
   paymentReturn("success");
-} else if (location.pathname === "/payment/failure") {
+} else if (location.pathname === "/pagamento/erro") {
   paymentReturn("failure");
-} else if (location.pathname === "/payment/pending") {
+} else if (location.pathname === "/pagamento/pendente") {
   paymentReturn("pending");
 } else {
   render(state.screen || "welcome");

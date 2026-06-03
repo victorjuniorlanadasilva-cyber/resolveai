@@ -1,8 +1,8 @@
 {
   "rewrites": [
-    { "source": "/payment/success", "destination": "/index.html" },
-    { "source": "/payment/failure", "destination": "/index.html" },
-    { "source": "/payment/pending", "destination": "/index.html" },
+    { "source": "/pagamento/sucesso", "destination": "/index.html" },
+    { "source": "/pagamento/erro", "destination": "/index.html" },
+    { "source": "/pagamento/pendente", "destination": "/index.html" },
     { "source": "/admin", "destination": "/index.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

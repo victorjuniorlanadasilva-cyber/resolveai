@@ -194,9 +194,9 @@ function mercadoPagoHeaders() {
 
 function mercadoPagoBackUrls() {
   return {
-    success: `${APP_URL}/payment/success`,
-    failure: `${APP_URL}/payment/failure`,
-    pending: `${APP_URL}/payment/pending`
+    success: `${APP_URL}/pagamento/sucesso`,
+    failure: `${APP_URL}/pagamento/erro`,
+    pending: `${APP_URL}/pagamento/pendente`
   };
 }
 
@@ -293,21 +293,12 @@ function mercadoPagoPaymentMethods(selectedMethod) {
   };
 }
 
-function createDemoMercadoPagoPreference(solicitacao) {
-  return {
-    id: `demo_mp_${crypto.randomUUID()}`,
-    init_point: "#",
-    sandbox_init_point: "#",
-    status: "demo",
-    external_reference: solicitacao.id,
-    back_urls: mercadoPagoBackUrls()
-  };
-}
-
-async function createMercadoPagoPreference(solicitacao, selectedMethod = "PIX") {
-  const normalizedMethod = normalizeMercadoPagoMethod(selectedMethod);
-  if (!process.env.MERCADOPAGO_ACCESS_TOKEN) return createDemoMercadoPagoPreference(solicitacao);
-  const paymentMethods = mercadoPagoPaymentMethods(normalizedMethod);
+async function createMercadoPagoPreference(solicitacao) {
+  if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
+    const error = new Error("MERCADOPAGO_ACCESS_TOKEN nao configurado no backend.");
+    error.status = 500;
+    throw error;
+  }
   const preference = {
     items: [{
       id: "resolveai-prioritario",
@@ -326,14 +317,14 @@ async function createMercadoPagoPreference(solicitacao, selectedMethod = "PIX") 
     notification_url: `${BACKEND_URL}/api/webhooks/mercadopago`,
     back_urls: mercadoPagoBackUrls(),
     metadata: {
-      protocolo: solicitacao.protocolo,
-      selected_payment_method: normalizedMethod
+      protocolo: solicitacao.protocolo
     },
-    payment_methods: paymentMethods
+    payment_methods: {
+      installments: 6
+    }
   };
   if (!isLocalAppUrl(APP_URL)) preference.auto_return = "approved";
   logMercadoPago("preferencia payload pronto", {
-    selectedMethod: normalizedMethod,
     solicitacaoId: solicitacao.id,
     protocolo: solicitacao.protocolo,
     appUrl: APP_URL,
@@ -394,6 +385,12 @@ async function initDb() {
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -472,10 +469,8 @@ app.patch("/api/solicitacoes/:id", asyncHandler(async (req, res) => {
   return res.json(toClient(updated.rows[0]));
 }));
 
-app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
-  const selectedMethod = normalizeMercadoPagoMethod(req.body.paymentMethod || "PIX");
+async function loadPriorityPaymentRequest(req) {
   logMercadoPago("rota pagamento recebida", {
-    selectedMethod,
     receivedPaymentMethod: req.body.paymentMethod || "",
     solicitacaoId: req.body.solicitacaoId || "",
     clientIdPresent: Boolean(req.body.clientId),
@@ -483,31 +478,33 @@ app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
   });
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);
   const item = toClient(result.rows[0]);
-  if (!item || item.plano !== "Prioritario") return res.status(404).json({ error: "Solicitacao prioritaria nao encontrada" });
-  if (item.clientId && item.clientId !== String(req.body.clientId || "").trim()) return res.status(403).json({ error: "Acesso negado" });
+  if (!item || item.plano !== "Prioritario") throw httpError(404, "Solicitacao prioritaria nao encontrada");
+  if (item.clientId && item.clientId !== String(req.body.clientId || "").trim()) throw httpError(403, "Acesso negado");
+  return item;
+}
+
+app.post("/api/payments/mercadopago/preference", asyncHandler(async (req, res) => {
+  const item = await loadPriorityPaymentRequest(req);
   try {
     logMercadoPago("criando checkout", {
-      selectedMethod,
       solicitacaoId: item.id,
       protocolo: item.protocolo,
       env: mercadoPagoEnvSnapshot()
     });
-    const preference = await createMercadoPagoPreference(item, selectedMethod);
+    const preference = await createMercadoPagoPreference(item);
+    const initPoint = preference.init_point || preference.sandbox_init_point || "";
     logMercadoPago("checkout criado", {
-      selectedMethod,
       solicitacaoId: item.id,
       protocolo: item.protocolo,
       preferenceId: preference.id || "",
-      initPointPresent: Boolean(preference.init_point),
+      initPointPresent: Boolean(initPoint),
       sandboxInitPointPresent: Boolean(preference.sandbox_init_point),
       mercadoPagoResponse: preference
     });
     await pool.query("update solicitacoes set mercado_pago_preference_id=$1,status_pagamento='aguardando_pagamento' where id=$2", [preference.id || "", item.id]);
-    const updated = await pool.query("select * from solicitacoes where id=$1", [item.id]);
-    return res.json({ solicitacao: toClient(updated.rows[0]), preference });
+    return res.json({ init_point: initPoint, preference_id: preference.id || "" });
   } catch (err) {
     console.error("[MERCADO_PAGO] erro ao gerar pagamento", {
-      selectedMethod,
       solicitacaoId: item.id,
       protocolo: item.protocolo,
       accessTokenPresent: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN),
@@ -522,6 +519,14 @@ app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
       details: err.details || err.message
     });
   }
+}));
+
+app.post("/api/payments/mercadopago", asyncHandler(async (req, res) => {
+  const item = await loadPriorityPaymentRequest(req);
+  const preference = await createMercadoPagoPreference(item);
+  await pool.query("update solicitacoes set mercado_pago_preference_id=$1,status_pagamento='aguardando_pagamento' where id=$2", [preference.id || "", item.id]);
+  const updated = await pool.query("select * from solicitacoes where id=$1", [item.id]);
+  return res.json({ solicitacao: toClient(updated.rows[0]), preference });
 }));
 
 app.post("/api/payments/demo-approve", asyncHandler(async (req, res) => {
@@ -598,7 +603,7 @@ app.patch("/api/admin/solicitacoes/:id", asyncHandler(async (req, res) => {
 
 app.use((err, _req, res, _next) => {
   console.error("[API]", err);
-  return res.status(500).json({ error: true, message: err.message || "Erro interno" });
+  return res.status(err.status || 500).json({ error: true, message: err.message || "Erro interno" });
 });
 
 initDb()
