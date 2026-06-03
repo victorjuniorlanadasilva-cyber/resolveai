@@ -1,0 +1,10 @@
+{
+  "name": "resolveai-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "start": "npx serve dist",
+    "dev": "npx serve ."
+  }
+}
