@@ -22,16 +22,16 @@ const pool = new Pool({
 
 const app = express();
 app.set("trust proxy", 1);
-const corsOrigins = [
-  process.env.FRONTEND_URL || "https://resolveai-nine.vercel.app",
+const corsOptions = {
+  origin: [
   "https://resolveai-nine.vercel.app",
   "http://localhost:3000",
   "http://localhost:5173"
-].filter(Boolean);
-app.use(cors({
-  origin: corsOrigins,
+  ],
   credentials: true
-}));
+};
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
