@@ -22,14 +22,45 @@ const pool = new Pool({
 
 const app = express();
 app.set("trust proxy", 1);
-const corsOptions = {
-  origin: [
+const allowedCorsOrigins = [
   "https://resolveai-nine.vercel.app",
   "http://localhost:3000",
   "http://localhost:5173"
-  ],
+];
+const corsOptions = {
+  origin: allowedCorsOrigins,
   credentials: true
 };
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  console.log("[CORS] request", {
+    frontendUrl: process.env.FRONTEND_URL || "",
+    origin,
+    method: req.method,
+    path: req.path
+  });
+  res.on("finish", () => {
+    console.log("[CORS] response", {
+      status: res.statusCode,
+      origin,
+      allowOrigin: res.getHeader("Access-Control-Allow-Origin") || "",
+      allowCredentials: res.getHeader("Access-Control-Allow-Credentials") || ""
+    });
+  });
+  next();
+});
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "";
+  if (allowedCorsOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  return next();
+});
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
