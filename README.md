@@ -69,8 +69,8 @@ Para o deploy atual do ResolveAi, confira estes valores nos paineis:
 ```env
 FRONTEND_URL=https://resolveai-nine.vercel.app
 APP_URL=https://resolveai-nine.vercel.app
-BACKEND_URL=https://resolveai-2blg.onrender.com
-VITE_API_URL=https://resolveai-2blg.onrender.com
+BACKEND_URL=https://resolveai-2b1g.onrender.com
+VITE_API_URL=https://resolveai-2b1g.onrender.com
 ```
 
 No Render, cadastre tambem `MERCADOPAGO_ACCESS_TOKEN` e `MERCADOPAGO_PUBLIC_KEY` com as credenciais de producao do Mercado Pago. Nao coloque esses valores no codigo.
