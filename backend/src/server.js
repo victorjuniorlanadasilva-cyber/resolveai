@@ -1,4 +1,7 @@
-require("dotenv").config();
+const dotenvResult = require("dotenv").config({ quiet: true });
+if (dotenvResult.error && dotenvResult.error.code !== "ENOENT") {
+  console.warn("[ENV] dotenv nao carregou .env local:", dotenvResult.error.message);
+}
 
 const express = require("express");
 const cors = require("cors");

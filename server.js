@@ -4,7 +4,10 @@ const path = require("path");
 const crypto = require("crypto");
 
 const ROOT = __dirname;
-const DOTENV_RESULT = require("dotenv").config({ path: path.join(ROOT, ".env") });
+const DOTENV_RESULT = require("dotenv").config({ path: path.join(ROOT, ".env"), quiet: true });
+if (DOTENV_RESULT.error && DOTENV_RESULT.error.code !== "ENOENT") {
+  console.warn("[ENV] dotenv nao carregou .env local:", DOTENV_RESULT.error.message);
+}
 const PUBLIC = path.join(ROOT, "public");
 const DATA = path.join(ROOT, "data", "db.json");
 const ENV = process.env;
@@ -315,12 +318,6 @@ function createDemoMercadoPagoPreference(solicitacao) {
 
 async function createMercadoPagoPreference(solicitacao) {
   logMercadoPago("configuracao", mercadoPagoConfigSnapshot());
-  if (DOTENV_RESULT.error) {
-    const error = new Error("Arquivo .env nao foi carregado.");
-    error.status = 500;
-    error.details = DOTENV_RESULT.error.message;
-    throw error;
-  }
   if (!ENV.MERCADOPAGO_ACCESS_TOKEN) {
     logMercadoPago("modo demonstracao", { reason: "MERCADOPAGO_ACCESS_TOKEN ausente" });
     return createDemoMercadoPagoPreference(solicitacao);
