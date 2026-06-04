@@ -13,7 +13,7 @@ if (!fs.existsSync(frontendRoot)) {
 fs.rmSync(publicDir, { recursive: true, force: true });
 fs.mkdirSync(path.join(publicDir, "assets"), { recursive: true });
 
-for (const file of ["index.html", "styles.css", "app.js"]) {
+for (const file of ["index.html", "styles.css", "app.js", "OneSignalSDKWorker.js"]) {
   fs.copyFileSync(path.join(frontendRoot, file), path.join(publicDir, file));
 }
 

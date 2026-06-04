@@ -25,6 +25,8 @@ let adminItems = [];
 let selectedAdmin = null;
 let trackItems = [];
 const FEATURED_KEY = "resolveai_featured_categories";
+let oneSignalInitStarted = false;
+let oneSignalInitDone = false;
 
 function getClientId() {
   let clientId = localStorage.getItem("resolveai_client_id");
@@ -35,6 +37,55 @@ function getClientId() {
   return clientId;
 }
 function saveState() { localStorage.setItem("resolveai_state", JSON.stringify(state)); }
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) return resolve();
+    const script = document.createElement("script");
+    script.src = src;
+    script.defer = true;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+async function registerPushDevice(subscriptionId) {
+  if (!subscriptionId) return;
+  state.oneSignalSubscriptionId = subscriptionId;
+  saveState();
+  await apiFetch("/api/notificacoes/dispositivo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId: getClientId(), subscriptionId, playerId: subscriptionId })
+  }).catch(() => {});
+}
+async function initOneSignalPush() {
+  if (oneSignalInitStarted || !("Notification" in window)) return;
+  oneSignalInitStarted = true;
+  try {
+    const configRes = await apiFetch("/api/config");
+    const config = configRes.ok ? await configRes.json() : {};
+    if (!config.oneSignalAppId) return;
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    await loadScript("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js");
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      await OneSignal.init({
+        appId: config.oneSignalAppId,
+        serviceWorkerPath: "/OneSignalSDKWorker.js",
+        serviceWorkerParam: { scope: "/" }
+      });
+      await OneSignal.login(getClientId());
+      OneSignal.User.PushSubscription.addEventListener("change", async (event) => {
+        await registerPushDevice(event.current?.id || OneSignal.User.PushSubscription.id || "");
+      });
+      if (Notification.permission === "default") await OneSignal.Notifications.requestPermission();
+      await registerPushDevice(OneSignal.User.PushSubscription.id || "");
+      oneSignalInitDone = true;
+    });
+  } catch (err) {
+    console.warn("[ONESIGNAL] push indisponivel", err);
+  }
+}
 function money(value) { return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 function dt(value) { return value ? new Date(value).toLocaleString("pt-BR") : "-"; }
 function textKey(value) { return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
@@ -64,6 +115,7 @@ function render(screen = "welcome") {
 }
 
 function welcome() {
+  initOneSignalPush();
   phone(`
     <div class="brand">
       <div class="logo-mark">✓</div>
@@ -176,7 +228,7 @@ function about() {
 }
 
 async function createRequest(temporary = false) {
-  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "", paymentId: state.paymentId || "", preferenceId: state.paymentPreferenceId || "" };
+  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "", paymentId: state.paymentId || "", preferenceId: state.paymentPreferenceId || "", oneSignalSubscriptionId: state.oneSignalSubscriptionId || "" };
   const res = await apiFetch("/api/solicitacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -482,6 +534,8 @@ if (location.pathname.startsWith("/admin")) {
   paymentReturn("failure");
 } else if (location.pathname === "/pagamento/pendente") {
   paymentReturn("pending");
+} else if (new URLSearchParams(location.search).get("abrir") === "minhas-solicitacoes") {
+  render("track");
 } else {
   render(state.screen || "welcome");
 }

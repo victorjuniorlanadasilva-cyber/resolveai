@@ -41,6 +41,7 @@ function writeDb(db) {
 function seedDb() {
   writeDb({
     solicitacoes: [],
+    notificacaoDispositivos: [],
     administradores: [
       {
         id: crypto.randomUUID(),
@@ -329,6 +330,27 @@ async function fetchMercadoPagoPayment(paymentId) {
   return mercadoPagoRequest(`/v1/payments/${paymentId}`, {}, "consulta pagamento", "GET");
 }
 
+async function sendOneSignalPush(subscriptionId, protocolo) {
+  if (!ENV.ONESIGNAL_APP_ID || !ENV.ONESIGNAL_REST_API_KEY || !subscriptionId) return null;
+  const response = await fetch("https://api.onesignal.com/notifications", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Key ${ENV.ONESIGNAL_REST_API_KEY}`
+    },
+    body: JSON.stringify({
+      app_id: ENV.ONESIGNAL_APP_ID,
+      include_subscription_ids: [subscriptionId],
+      headings: { pt: "ResolveAi", en: "ResolveAi" },
+      contents: { pt: "Sua solução já está disponível. Toque para ver.", en: "Sua solução já está disponível. Toque para ver." },
+      url: `${appBaseUrl()}/?abrir=minhas-solicitacoes`,
+      data: { protocolo, screen: "track" }
+    })
+  });
+  if (!response.ok) console.error("[ONESIGNAL] erro ao enviar push", await response.text());
+  return response.ok;
+}
+
 async function assertApprovedPayment(paymentId, expectedPlan) {
   if (!paymentId) {
     const error = new Error("payment_id obrigatorio para confirmar a solicitacao");
@@ -373,6 +395,7 @@ async function api(req, res) {
   const db = readDb();
   try {
     if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/api/config") return json(res, 200, { oneSignalAppId: ENV.ONESIGNAL_APP_ID || "" });
     if (req.method === "GET" && url.pathname === "/api/routes") {
       return json(res, 200, {
         ok: true,
@@ -393,6 +416,28 @@ async function api(req, res) {
         .filter((s) => s.clientId === clientId && s.statusPagamento === "aprovado")
         .sort((a, b) => new Date(b.dataCriacao) - new Date(a.dataCriacao));
       return json(res, 200, items);
+    }
+    if (req.method === "POST" && url.pathname === "/api/notificacoes/dispositivo") {
+      const data = await body(req);
+      const clientId = String(data.clientId || "").trim();
+      const subscriptionId = String(data.subscriptionId || data.playerId || "").trim();
+      if (!clientId) return json(res, 400, { error: "clientId obrigatorio" });
+      if (!subscriptionId) return json(res, 400, { error: "subscriptionId obrigatorio" });
+      db.notificacaoDispositivos = db.notificacaoDispositivos || [];
+      const existing = db.notificacaoDispositivos.find((item) => item.clientId === clientId);
+      if (existing) {
+        existing.onesignalSubscriptionId = subscriptionId;
+        existing.onesignalPlayerId = subscriptionId;
+        existing.dataAtualizacao = nowIso();
+      } else {
+        db.notificacaoDispositivos.push({ clientId, onesignalSubscriptionId: subscriptionId, onesignalPlayerId: subscriptionId, dataAtualizacao: nowIso() });
+      }
+      db.solicitacoes.filter((item) => item.clientId === clientId).forEach((item) => {
+        item.oneSignalSubscriptionId = subscriptionId;
+        item.oneSignalPlayerId = subscriptionId;
+      });
+      writeDb(db);
+      return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/api/solicitacoes/recuperar") {
       const data = await body(req);
@@ -436,9 +481,16 @@ async function api(req, res) {
         valorPago: paymentValueForPlan(plan),
         mercadoPagoPaymentId: String(payment.id || paymentId),
         mercadoPagoPreferenceId: String(data.preferenceId || ""),
+        oneSignalSubscriptionId: String(data.oneSignalSubscriptionId || ""),
+        oneSignalPlayerId: String(data.oneSignalSubscriptionId || ""),
         dataCriacao: nowIso(),
         dataResposta: ""
       };
+      if (!item.oneSignalSubscriptionId) {
+        const device = (db.notificacaoDispositivos || []).find((entry) => entry.clientId === item.clientId);
+        item.oneSignalSubscriptionId = device?.onesignalSubscriptionId || "";
+        item.oneSignalPlayerId = device?.onesignalPlayerId || "";
+      }
       if (!item.clientId || !item.problema || !item.nome || !item.cidade) return json(res, 400, { error: "Dados obrigatorios ausentes" });
       db.solicitacoes.unshift(item);
       writeDb(db);
@@ -580,11 +632,13 @@ async function api(req, res) {
       const data = await body(req);
       const item = db.solicitacoes.find((s) => s.id === id);
       if (!item) return json(res, 404, { error: "Solicitacao nao encontrada" });
-      ["respostaAdmin", "status"].forEach((key) => {
-        if (typeof data[key] === "string") item[key] = data[key];
-      });
+      if (typeof data.respostaAdmin === "string") item.respostaAdmin = data.respostaAdmin;
+      const shouldPush = item.respostaAdmin && item.respostaAdmin.trim() && item.status !== "Respondido";
+      const requestedStatus = typeof data.status === "string" ? data.status : "";
+      item.status = requestedStatus === "Cancelado" ? "Cancelado" : (item.respostaAdmin && item.respostaAdmin.trim() ? "Respondido" : (requestedStatus || item.status));
       if (item.status === "Respondido" && !item.dataResposta) item.dataResposta = nowIso();
       writeDb(db);
+      if (shouldPush) await sendOneSignalPush(item.oneSignalSubscriptionId, item.protocolo);
       return json(res, 200, item);
     }
     return publicRequest(req, res);

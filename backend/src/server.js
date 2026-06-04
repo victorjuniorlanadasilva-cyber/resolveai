@@ -100,6 +100,7 @@ function toClient(row) {
     valorPago: Number(row.valor_pago || 0),
     mercadoPagoPaymentId: row.mercado_pago_payment_id || "",
     mercadoPagoPreferenceId: row.mercado_pago_preference_id || "",
+    oneSignalSubscriptionId: row.onesignal_subscription_id || "",
     dataCriacao: row.data_criacao,
     dataResposta: row.data_resposta || ""
   };
@@ -240,6 +241,53 @@ function mercadoPagoEnvSnapshot() {
   };
 }
 
+function oneSignalEnvSnapshot() {
+  return {
+    appIdPresent: Boolean(process.env.ONESIGNAL_APP_ID),
+    restApiKeyPresent: Boolean(process.env.ONESIGNAL_REST_API_KEY)
+  };
+}
+
+async function oneSignalRequest(payload) {
+  if (!process.env.ONESIGNAL_APP_ID || !process.env.ONESIGNAL_REST_API_KEY) {
+    console.warn("[ONESIGNAL] variaveis ausentes", oneSignalEnvSnapshot());
+    return null;
+  }
+  const response = await fetch("https://api.onesignal.com/notifications", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Key ${process.env.ONESIGNAL_REST_API_KEY}`
+    },
+    body: JSON.stringify({ app_id: process.env.ONESIGNAL_APP_ID, ...payload })
+  });
+  const text = await response.text();
+  let data;
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!response.ok) {
+    console.error("[ONESIGNAL] erro ao enviar push", { status: response.status, response: data });
+    return null;
+  }
+  console.log("[ONESIGNAL] push enviado", data);
+  return data;
+}
+
+async function sendSolutionPush(item) {
+  const subscriptions = [];
+  if (item.onesignal_subscription_id) subscriptions.push(item.onesignal_subscription_id);
+  const saved = await pool.query("select onesignal_subscription_id from notificacao_dispositivos where client_id = $1 and onesignal_subscription_id <> ''", [item.client_id]);
+  saved.rows.forEach((row) => subscriptions.push(row.onesignal_subscription_id));
+  const uniqueSubscriptions = Array.from(new Set(subscriptions.filter(Boolean)));
+  if (!uniqueSubscriptions.length) return null;
+  return oneSignalRequest({
+    include_subscription_ids: uniqueSubscriptions,
+    headings: { pt: "ResolveAi", en: "ResolveAi" },
+    contents: { pt: "Sua solução já está disponível. Toque para ver.", en: "Sua solução já está disponível. Toque para ver." },
+    url: `${APP_URL}/?abrir=minhas-solicitacoes`,
+    data: { protocolo: item.protocolo, screen: "track" }
+  });
+}
+
 async function mercadoPagoRequest(pathname, payload, step, method = "POST") {
   const url = `${mercadoPagoBaseUrl()}${pathname}`;
   logMercadoPago(`${step} request`, { method, url, payload });
@@ -370,6 +418,14 @@ async function initDb() {
   }
   const schema = fs.readFileSync(path.join(__dirname, "..", "sql", "schema.sql"), "utf8");
   await pool.query(schema);
+  await pool.query("alter table solicitacoes add column if not exists onesignal_subscription_id text default ''");
+  await pool.query("alter table solicitacoes add column if not exists onesignal_player_id text default ''");
+  await pool.query(`create table if not exists notificacao_dispositivos (
+    client_id text primary key,
+    onesignal_subscription_id text not null default '',
+    onesignal_player_id text not null default '',
+    data_atualizacao timestamptz not null default now()
+  )`);
   const admin = await pool.query("select id from administradores where email = $1", ["victorjuniorlanadasilva@gmail.com"]);
   if (!admin.rows.length) {
     await pool.query(
@@ -391,6 +447,10 @@ function httpError(status, message) {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+app.get("/api/config", (_req, res) => res.json({
+  oneSignalAppId: process.env.ONESIGNAL_APP_ID || ""
+}));
+
 app.get("/api/routes", (_req, res) => res.json({
   ok: true,
   server: "backend/src/server.js",
@@ -408,6 +468,28 @@ app.get("/api/solicitacoes", asyncHandler(async (req, res) => {
   if (!clientId) return res.status(400).json({ error: "clientId obrigatorio" });
   const result = await pool.query("select * from solicitacoes where client_id = $1 and status_pagamento = 'aprovado' order by data_criacao desc", [clientId]);
   return res.json(result.rows.map(toClient));
+}));
+
+app.post("/api/notificacoes/dispositivo", asyncHandler(async (req, res) => {
+  const clientId = String(req.body.clientId || "").trim();
+  const subscriptionId = String(req.body.subscriptionId || req.body.playerId || "").trim();
+  const playerId = String(req.body.playerId || req.body.subscriptionId || "").trim();
+  if (!clientId) return res.status(400).json({ error: "clientId obrigatorio" });
+  if (!subscriptionId) return res.status(400).json({ error: "subscriptionId obrigatorio" });
+  await pool.query(
+    `insert into notificacao_dispositivos (client_id, onesignal_subscription_id, onesignal_player_id, data_atualizacao)
+     values ($1,$2,$3,now())
+     on conflict (client_id) do update
+       set onesignal_subscription_id=excluded.onesignal_subscription_id,
+           onesignal_player_id=excluded.onesignal_player_id,
+           data_atualizacao=now()`,
+    [clientId, subscriptionId, playerId]
+  );
+  await pool.query(
+    "update solicitacoes set onesignal_subscription_id=$1, onesignal_player_id=$2 where client_id=$3",
+    [subscriptionId, playerId, clientId]
+  );
+  return res.json({ ok: true });
 }));
 
 app.post("/api/solicitacoes/recuperar", asyncHandler(async (req, res) => {
@@ -452,15 +534,35 @@ app.post("/api/solicitacoes", asyncHandler(async (req, res) => {
     respostaAdmin: "",
     valorPago: paymentValueForPlan(plan),
     mercadoPagoPaymentId: String(payment.id || paymentId),
-    mercadoPagoPreferenceId: String(req.body.preferenceId || "")
+    mercadoPagoPreferenceId: String(req.body.preferenceId || ""),
+    oneSignalSubscriptionId: String(req.body.oneSignalSubscriptionId || "").trim()
   };
   if (!item.clientId || !item.problema || !item.nome || !item.cidade) return res.status(400).json({ error: "Dados obrigatorios ausentes" });
   await pool.query(
     `insert into solicitacoes
-     (id, client_id, protocolo, nome, cidade, whatsapp, email, contato, categoria, problema, plano, canal_resposta, status, status_pagamento, resposta_admin, valor_pago, mercado_pago_payment_id, mercado_pago_preference_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-    [item.id, item.clientId, item.protocolo, item.nome, item.cidade, item.whatsapp, item.email, item.contato, item.categoria, item.problema, item.plano, item.canalResposta, item.status, item.statusPagamento, item.respostaAdmin, item.valorPago, item.mercadoPagoPaymentId, item.mercadoPagoPreferenceId]
+     (id, client_id, protocolo, nome, cidade, whatsapp, email, contato, categoria, problema, plano, canal_resposta, status, status_pagamento, resposta_admin, valor_pago, mercado_pago_payment_id, mercado_pago_preference_id, onesignal_subscription_id, onesignal_player_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+    [item.id, item.clientId, item.protocolo, item.nome, item.cidade, item.whatsapp, item.email, item.contato, item.categoria, item.problema, item.plano, item.canalResposta, item.status, item.statusPagamento, item.respostaAdmin, item.valorPago, item.mercadoPagoPaymentId, item.mercadoPagoPreferenceId, item.oneSignalSubscriptionId, item.oneSignalSubscriptionId]
   );
+  if (item.oneSignalSubscriptionId) {
+    await pool.query(
+      `insert into notificacao_dispositivos (client_id, onesignal_subscription_id, onesignal_player_id, data_atualizacao)
+       values ($1,$2,$2,now())
+       on conflict (client_id) do update
+         set onesignal_subscription_id=excluded.onesignal_subscription_id,
+             onesignal_player_id=excluded.onesignal_player_id,
+             data_atualizacao=now()`,
+      [item.clientId, item.oneSignalSubscriptionId]
+    );
+  }
+  const device = await pool.query("select onesignal_subscription_id, onesignal_player_id from notificacao_dispositivos where client_id=$1", [item.clientId]);
+  if (device.rows[0]) {
+    await pool.query(
+      "update solicitacoes set onesignal_subscription_id=$1, onesignal_player_id=$2 where id=$3",
+      [device.rows[0].onesignal_subscription_id || "", device.rows[0].onesignal_player_id || "", item.id]
+    );
+    item.oneSignalSubscriptionId = device.rows[0].onesignal_subscription_id || "";
+  }
   return res.status(201).json(item);
 }));
 
@@ -633,14 +735,19 @@ app.get("/api/admin/solicitacoes", asyncHandler(async (_req, res) => {
 
 app.patch("/api/admin/solicitacoes/:id", asyncHandler(async (req, res) => {
   const current = await pool.query("select * from solicitacoes where id=$1", [req.params.id]);
-  if (!current.rows[0]) return res.status(404).json({ error: "Solicitacao nao encontrada" });
-  const respostaAdmin = typeof req.body.respostaAdmin === "string" ? req.body.respostaAdmin : current.rows[0].resposta_admin;
-  const status = typeof req.body.status === "string" ? req.body.status : current.rows[0].status;
+  const before = current.rows[0];
+  if (!before) return res.status(404).json({ error: "Solicitacao nao encontrada" });
+  const respostaAdmin = typeof req.body.respostaAdmin === "string" ? req.body.respostaAdmin : before.resposta_admin;
+  const requestedStatus = typeof req.body.status === "string" ? req.body.status : "";
+  const status = requestedStatus === "Cancelado" ? "Cancelado" : (respostaAdmin && respostaAdmin.trim() ? "Respondido" : (requestedStatus || before.status));
   await pool.query(
     "update solicitacoes set resposta_admin=$1,status=$2,data_resposta=case when $2='Respondido' and data_resposta is null then now() else data_resposta end where id=$3",
     [respostaAdmin, status, req.params.id]
   );
   const updated = await pool.query("select * from solicitacoes where id=$1", [req.params.id]);
+  if (status === "Respondido" && respostaAdmin.trim() && (before.resposta_admin !== respostaAdmin || before.status !== "Respondido")) {
+    await sendSolutionPush(updated.rows[0]);
+  }
   return res.json(toClient(updated.rows[0]));
 }));
 

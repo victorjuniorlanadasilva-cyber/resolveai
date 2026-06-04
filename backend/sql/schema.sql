@@ -17,6 +17,8 @@ create table if not exists solicitacoes (
   valor_pago numeric(10,2) default 0,
   mercado_pago_payment_id text default '',
   mercado_pago_preference_id text default '',
+  onesignal_subscription_id text default '',
+  onesignal_player_id text default '',
   data_criacao timestamptz not null default now(),
   data_resposta timestamptz
 );
@@ -34,4 +36,11 @@ create table if not exists sessoes (
   id uuid primary key,
   admin_id uuid not null references administradores(id) on delete cascade,
   data_criacao timestamptz not null default now()
+);
+
+create table if not exists notificacao_dispositivos (
+  client_id text primary key,
+  onesignal_subscription_id text not null default '',
+  onesignal_player_id text not null default '',
+  data_atualizacao timestamptz not null default now()
 );
