@@ -105,11 +105,6 @@ function priority() {
 function pickPlan(plan) { state.plano = plan; saveState(); render("payment"); }
 
 async function payment() {
-  if (!state.tempRequest) {
-    const created = await createRequest(true);
-    if (!created) return;
-    state.tempRequest = created; saveState();
-  }
   phone(`${step("Pagamento")}
     <section class="payment-card details">
       <h2 class="screen-title">Atendimento ${state.plano === "Prioritario" ? "Prioritário" : "Normal"}</h2>
@@ -126,7 +121,6 @@ function paymentFallback(message = "Nao foi possivel gerar o pagamento agora. Te
   if (target) target.innerHTML = message ? `<div class="notice">${message}</div>` : "";
 }
 async function requestMercadoPagoPreference() {
-  if (!state.tempRequest) return;
   const button = $("#mercadoPagoButton");
   try {
     if (button) { button.disabled = true; button.textContent = "Abrindo Mercado Pago..."; }
@@ -134,12 +128,13 @@ async function requestMercadoPagoPreference() {
     const res = await apiFetch("/api/payments/mercadopago/preference", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id })
+      body: JSON.stringify({ clientId: getClientId(), plano: state.plano, categoria: state.categoria, problema: state.problema })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || "Nao foi possivel gerar o pagamento agora. Tente novamente.");
     if (!data.init_point) throw new Error("Nao foi possivel abrir o Mercado Pago agora. Tente novamente.");
     state.paymentPreferenceId = data.preference_id || "";
+    state.tempRequest = null;
     saveState();
     window.location.href = data.init_point;
   } catch (err) {
@@ -150,11 +145,11 @@ async function requestMercadoPagoPreference() {
   }
 }
 async function approveDemoPayment() {
-  if (state.tempRequest) {
-    const res = await apiFetch("/api/payments/demo-approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), solicitacaoId: state.tempRequest.id }) });
-    if (res.ok) state.tempRequest = await res.json();
-  }
-  state.pagamentoAprovado = true; saveState(); render("channel");
+  state.pagamentoAprovado = true;
+  state.paymentId = "demo";
+  state.canalResposta = state.canalResposta || "Pelo aplicativo";
+  saveState();
+  render("about");
 }
 
 function channel() {
@@ -181,25 +176,23 @@ function about() {
 }
 
 async function createRequest(temporary = false) {
-  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "" };
+  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "", paymentId: state.paymentId || "", preferenceId: state.paymentPreferenceId || "" };
   const res = await apiFetch("/api/solicitacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-  if (!res.ok) { alert("Não foi possível criar a solicitação."); return null; }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || "Não foi possível criar a solicitação.");
+    return null;
+  }
   return res.json();
 }
 async function submitClient() {
+  if (!state.pagamentoAprovado || !state.paymentId) return alert("Confirme o pagamento antes de enviar a solicitação.");
   if (!state.nome || !state.cidade) return alert("Informe nome e cidade.");
   if (state.canalResposta === "WhatsApp" && !state.whatsapp) return alert("WhatsApp obrigatório para este canal.");
   if (state.canalResposta === "E-mail" && !state.email) return alert("E-mail obrigatório para este canal.");
-  let item = state.tempRequest;
-  if (item) {
-    const res = await apiFetch(`/api/solicitacoes/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId: getClientId(), nome: state.nome, cidade: state.cidade, whatsapp: state.whatsapp || "", email: state.email || "", canalResposta: state.canalResposta }) });
-    if (res.ok) item = await res.json();
-  } else item = await createRequest();
+  state.tempRequest = null;
+  let item = await createRequest();
   if (!item) return;
-  if (state.tempRequest) {
-    const res = await apiFetch(`/api/solicitacoes/${encodeURIComponent(item.protocolo)}?clientId=${encodeURIComponent(getClientId())}`);
-    item = await res.json();
-  }
   state.last = { ...item, nome: state.nome, cidade: state.cidade, whatsapp: state.whatsapp, email: state.email, canalResposta: state.canalResposta };
   localStorage.setItem("resolveai_last_protocol", item.protocolo);
   saveState();
@@ -287,17 +280,19 @@ async function recoverRequest() {
 }
 
 function paymentReturn(kind) {
-  if (kind === "success") {
-    state.pagamentoAprovado = true;
-    saveState();
-  }
+  const params = new URLSearchParams(location.search);
+  const paymentId = params.get("payment_id") || params.get("collection_id") || "";
+  const preferenceId = params.get("preference_id") || state.paymentPreferenceId || "";
+  if (paymentId) state.paymentId = paymentId;
+  if (preferenceId) state.paymentPreferenceId = preferenceId;
+  saveState();
   const config = {
     success: {
       pill: "Pagamento aprovado",
       icon: "✓",
-      title: "Pagamento recebido!",
-      text: "Seu atendimento será liberado assim que a confirmação do Mercado Pago chegar ao ResolveAi.",
-      action: "Acompanhar solicitação"
+      title: "Confirme seu pagamento",
+      text: "Depois que o Mercado Pago confirmar, liberamos o formulário para enviar sua solicitação.",
+      action: "Já realizei o pagamento"
     },
     failure: {
       pill: "Pagamento não concluído",
@@ -311,14 +306,14 @@ function paymentReturn(kind) {
       icon: "…",
       title: "Pagamento em análise",
       text: "Recebemos o retorno do Mercado Pago e estamos aguardando a confirmação final.",
-      action: "Acompanhar solicitação"
+      action: "Já realizei o pagamento"
     }
   }[kind] || {
     pill: "Pagamento",
     icon: "✓",
     title: "Pagamento",
     text: "Acompanhe sua solicitação para ver o status atualizado.",
-    action: "Acompanhar solicitação"
+      action: "Acompanhar solicitação"
   };
   phone(`${step(config.pill, false)}
     <div class="success">
@@ -326,8 +321,40 @@ function paymentReturn(kind) {
       <h2 class="screen-title">${config.title}</h2>
       <p class="screen-copy">${config.text}</p>
     </div>
-    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : kind === "success" ? "render('channel')" : "render('track')"}">${kind === "success" ? "Continuar" : config.action}</button></div>
+    <div id="paymentStatusNotice"></div>
+    <div class="bottom"><button class="btn" onclick="${kind === "failure" ? "render('priority')" : "confirmMercadoPagoPayment()"}">${kind === "failure" ? config.action : "Já realizei o pagamento"}</button></div>
   `);
+}
+
+async function confirmMercadoPagoPayment() {
+  const params = new URLSearchParams(location.search);
+  const paymentId = params.get("payment_id") || params.get("collection_id") || state.paymentId || "";
+  const target = $("#paymentStatusNotice");
+  if (!paymentId) {
+    if (target) target.innerHTML = `<div class="notice">Não encontramos o código do pagamento no retorno do Mercado Pago.</div>`;
+    return;
+  }
+  try {
+    if (target) target.innerHTML = `<div class="notice">Consultando pagamento...</div>`;
+    const res = await apiFetch(`/api/payments/mercadopago/status?payment_id=${encodeURIComponent(paymentId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || "Não foi possível consultar o pagamento.");
+    if (data.status === "approved" || data.statusPagamento === "aprovado") {
+      state.pagamentoAprovado = true;
+      state.paymentId = String(paymentId);
+      state.canalResposta = state.canalResposta || "Pelo aplicativo";
+      saveState();
+      render("about");
+      return;
+    }
+    if (["pending", "in_process", "authorized", "aguardando_pagamento"].includes(data.status || data.statusPagamento)) {
+      if (target) target.innerHTML = `<div class="notice">Pagamento ainda não confirmado. Aguarde alguns instantes e tente novamente.</div>`;
+      return;
+    }
+    if (target) target.innerHTML = `<div class="notice">Pagamento não aprovado. Tente novamente.</div>`;
+  } catch (err) {
+    if (target) target.innerHTML = `<div class="notice">${err.message || "Não foi possível consultar o pagamento agora."}</div>`;
+  }
 }
 
 async function adminInit() {

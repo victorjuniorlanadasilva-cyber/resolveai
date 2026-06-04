@@ -345,6 +345,25 @@ async function fetchMercadoPagoPayment(paymentId) {
   return mercadoPagoRequest(`/v1/payments/${paymentId}`, {}, "consulta pagamento", "GET");
 }
 
+async function assertApprovedPayment(paymentId, expectedPlan) {
+  if (!paymentId) throw httpError(400, "payment_id obrigatorio para confirmar a solicitacao");
+  if (paymentId === "demo" && !process.env.MERCADOPAGO_ACCESS_TOKEN) {
+    return { id: "demo", status: "approved", statusPagamento: "aprovado" };
+  }
+  const payment = await fetchMercadoPagoPayment(paymentId);
+  const statusPagamento = mapMercadoPagoStatus(payment.status);
+  if (statusPagamento !== "aprovado") {
+    const message = statusPagamento === "aguardando_pagamento"
+      ? "Pagamento ainda nao confirmado. Aguarde alguns instantes e tente novamente."
+      : "Pagamento nao aprovado. Tente novamente.";
+    throw httpError(402, message);
+  }
+  const amount = Number(payment.transaction_amount || payment.total_paid_amount || 0);
+  const expectedAmount = paymentValueForPlan(expectedPlan);
+  if (amount && Math.abs(amount - expectedAmount) > 0.01) throw httpError(400, "Valor do pagamento nao corresponde ao plano escolhido.");
+  return { ...payment, statusPagamento };
+}
+
 async function initDb() {
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL nao configurada. Configure a connection string do Supabase.");
@@ -411,6 +430,10 @@ app.get("/api/solicitacoes/:protocolo", asyncHandler(async (req, res) => {
 
 app.post("/api/solicitacoes", asyncHandler(async (req, res) => {
   const plan = normalizePlan(req.body.plano);
+  const paymentId = String(req.body.paymentId || req.body.collectionId || "").trim();
+  const payment = await assertApprovedPayment(paymentId, plan);
+  const existingPayment = await pool.query("select * from solicitacoes where mercado_pago_payment_id = $1", [String(payment.id || paymentId)]);
+  if (existingPayment.rows[0]) return res.status(409).json({ error: "Este pagamento ja foi usado em uma solicitacao." });
   const item = {
     id: crypto.randomUUID(),
     clientId: String(req.body.clientId || "").trim(),
@@ -425,16 +448,18 @@ app.post("/api/solicitacoes", asyncHandler(async (req, res) => {
     plano: plan,
     canalResposta: String(req.body.canalResposta || "Pelo aplicativo"),
     status: "Em analise",
-    statusPagamento: "aguardando_pagamento",
+    statusPagamento: "aprovado",
     respostaAdmin: "",
-    valorPago: 0
+    valorPago: paymentValueForPlan(plan),
+    mercadoPagoPaymentId: String(payment.id || paymentId),
+    mercadoPagoPreferenceId: String(req.body.preferenceId || "")
   };
   if (!item.clientId || !item.problema || !item.nome || !item.cidade) return res.status(400).json({ error: "Dados obrigatorios ausentes" });
   await pool.query(
     `insert into solicitacoes
-     (id, client_id, protocolo, nome, cidade, whatsapp, email, contato, categoria, problema, plano, canal_resposta, status, status_pagamento, resposta_admin, valor_pago)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [item.id, item.clientId, item.protocolo, item.nome, item.cidade, item.whatsapp, item.email, item.contato, item.categoria, item.problema, item.plano, item.canalResposta, item.status, item.statusPagamento, item.respostaAdmin, item.valorPago]
+     (id, client_id, protocolo, nome, cidade, whatsapp, email, contato, categoria, problema, plano, canal_resposta, status, status_pagamento, resposta_admin, valor_pago, mercado_pago_payment_id, mercado_pago_preference_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+    [item.id, item.clientId, item.protocolo, item.nome, item.cidade, item.whatsapp, item.email, item.contato, item.categoria, item.problema, item.plano, item.canalResposta, item.status, item.statusPagamento, item.respostaAdmin, item.valorPago, item.mercadoPagoPaymentId, item.mercadoPagoPreferenceId]
   );
   return res.status(201).json(item);
 }));
@@ -465,6 +490,19 @@ async function loadPriorityPaymentRequest(req) {
     clientIdPresent: Boolean(req.body.clientId),
     env: mercadoPagoEnvSnapshot()
   });
+  if (!req.body.solicitacaoId) {
+    return {
+      id: `draft_${crypto.randomUUID()}`,
+      clientId: String(req.body.clientId || "").trim(),
+      protocolo: "pendente",
+      nome: "Cliente",
+      email: "",
+      whatsapp: "",
+      plano: normalizePlan(req.body.plano),
+      categoria: String(req.body.categoria || "Outros").trim(),
+      problema: String(req.body.problema || "").slice(0, 1000)
+    };
+  }
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);
   const item = toClient(result.rows[0]);
   if (!item || !["Normal", "Prioritario"].includes(item.plano)) throw httpError(404, "Solicitacao de pagamento nao encontrada");
@@ -517,15 +555,22 @@ app.all("/api/payments/mercadopago/preference", (req, res) => {
   });
 });
 
-app.get("/api/payments/mercadopago/status", (_req, res) => {
+app.get("/api/payments/mercadopago/status", asyncHandler(async (req, res) => {
+  const paymentId = String(req.query.payment_id || req.query.collection_id || "").trim();
+  if (!paymentId) return res.status(400).json({ error: "payment_id ou collection_id obrigatorio" });
+  if (paymentId === "demo" && !process.env.MERCADOPAGO_ACCESS_TOKEN) {
+    return res.json({ id: "demo", status: "approved", statusPagamento: "aprovado" });
+  }
+  const payment = await fetchMercadoPagoPayment(paymentId);
   return res.json({
-    ok: true,
-    route: "/api/payments/mercadopago/preference",
-    method: "POST",
-    accessTokenPresent: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN),
-    publicKeyPresent: Boolean(process.env.MERCADOPAGO_PUBLIC_KEY)
+    id: String(payment.id || paymentId),
+    status: payment.status,
+    statusPagamento: mapMercadoPagoStatus(payment.status),
+    transaction_amount: payment.transaction_amount,
+    external_reference: payment.external_reference || "",
+    preference_id: payment.preference_id || ""
   });
-});
+}));
 
 app.post("/api/payments/demo-approve", asyncHandler(async (req, res) => {
   if (process.env.MERCADOPAGO_ACCESS_TOKEN) return res.status(403).json({ error: "Aprovacao demonstrativa desativada com Mercado Pago configurado." });

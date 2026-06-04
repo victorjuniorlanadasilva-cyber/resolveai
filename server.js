@@ -329,6 +329,32 @@ async function fetchMercadoPagoPayment(paymentId) {
   return mercadoPagoRequest(`/v1/payments/${paymentId}`, {}, "consulta pagamento", "GET");
 }
 
+async function assertApprovedPayment(paymentId, expectedPlan) {
+  if (!paymentId) {
+    const error = new Error("payment_id obrigatorio para confirmar a solicitacao");
+    error.status = 400;
+    throw error;
+  }
+  if (paymentId === "demo" && !ENV.MERCADOPAGO_ACCESS_TOKEN) {
+    return { id: "demo", status: "approved", statusPagamento: "aprovado" };
+  }
+  const payment = await fetchMercadoPagoPayment(paymentId);
+  const statusPagamento = mapMercadoPagoStatus(payment.status);
+  if (statusPagamento !== "aprovado") {
+    const error = new Error(statusPagamento === "aguardando_pagamento" ? "Pagamento ainda nao confirmado. Aguarde alguns instantes e tente novamente." : "Pagamento nao aprovado. Tente novamente.");
+    error.status = 402;
+    throw error;
+  }
+  const amount = Number(payment.transaction_amount || payment.total_paid_amount || 0);
+  const expectedAmount = paymentValueForPlan(expectedPlan);
+  if (amount && Math.abs(amount - expectedAmount) > 0.01) {
+    const error = new Error("Valor do pagamento nao corresponde ao plano escolhido.");
+    error.status = 400;
+    throw error;
+  }
+  return { ...payment, statusPagamento };
+}
+
 function publicRequest(req, res) {
   let urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
   if (urlPath === "/") urlPath = "/index.html";
@@ -388,6 +414,9 @@ async function api(req, res) {
     if (req.method === "POST" && url.pathname === "/api/solicitacoes") {
       const data = await body(req);
       const plan = normalizePlan(data.plano);
+      const paymentId = String(data.paymentId || data.collectionId || "").trim();
+      const payment = await assertApprovedPayment(paymentId, plan);
+      if (db.solicitacoes.some((item) => item.mercadoPagoPaymentId === String(payment.id || paymentId))) return json(res, 409, { error: "Este pagamento ja foi usado em uma solicitacao." });
       const item = {
         id: crypto.randomUUID(),
         clientId: String(data.clientId || "").trim(),
@@ -402,10 +431,11 @@ async function api(req, res) {
         plano: plan,
         canalResposta: String(data.canalResposta || "Pelo aplicativo"),
         status: "Em análise",
-        statusPagamento: "aguardando_pagamento",
+        statusPagamento: "aprovado",
         respostaAdmin: "",
-        valorPago: 0,
-        mercadoPagoPaymentId: "",
+        valorPago: paymentValueForPlan(plan),
+        mercadoPagoPaymentId: String(payment.id || paymentId),
+        mercadoPagoPreferenceId: String(data.preferenceId || ""),
         dataCriacao: nowIso(),
         dataResposta: ""
       };
@@ -431,14 +461,26 @@ async function api(req, res) {
     }
     if (req.method === "POST" && url.pathname === "/api/payments/mercadopago/preference") {
       const data = await body(req);
-      const item = db.solicitacoes.find((s) => s.id === data.solicitacaoId);
+      const item = data.solicitacaoId ? db.solicitacoes.find((s) => s.id === data.solicitacaoId) : {
+        id: `draft_${crypto.randomUUID()}`,
+        clientId: String(data.clientId || "").trim(),
+        protocolo: "pendente",
+        nome: "Cliente",
+        email: "",
+        whatsapp: "",
+        plano: normalizePlan(data.plano),
+        categoria: String(data.categoria || "Outros").trim(),
+        problema: String(data.problema || "").slice(0, 1000)
+      };
       if (!item || !["Normal", "Prioritario"].includes(item.plano)) return json(res, 404, { error: "Solicitacao de pagamento nao encontrada" });
       if (item.clientId && item.clientId !== String(data.clientId || "").trim()) return json(res, 403, { error: "Acesso negado" });
       try {
         const preference = await createMercadoPagoPreference(item);
-        item.mercadoPagoPreferenceId = preference.id || item.mercadoPagoPreferenceId || "";
-        item.statusPagamento = "aguardando_pagamento";
-        writeDb(db);
+        if (data.solicitacaoId) {
+          item.mercadoPagoPreferenceId = preference.id || item.mercadoPagoPreferenceId || "";
+          item.statusPagamento = "aguardando_pagamento";
+          writeDb(db);
+        }
         const initPoint = preference.init_point || preference.sandbox_init_point || "";
         return json(res, 200, { init_point: initPoint, preference_id: preference.id || "" });
       } catch (err) {
@@ -464,12 +506,17 @@ async function api(req, res) {
       });
     }
     if (req.method === "GET" && url.pathname === "/api/payments/mercadopago/status") {
+      const paymentId = String(url.searchParams.get("payment_id") || url.searchParams.get("collection_id") || "").trim();
+      if (!paymentId) return json(res, 400, { error: "payment_id ou collection_id obrigatorio" });
+      if (paymentId === "demo" && !ENV.MERCADOPAGO_ACCESS_TOKEN) return json(res, 200, { id: "demo", status: "approved", statusPagamento: "aprovado" });
+      const payment = await fetchMercadoPagoPayment(paymentId);
       return json(res, 200, {
-        ok: true,
-        route: "/api/payments/mercadopago/preference",
-        method: "POST",
-        accessTokenPresent: Boolean(ENV.MERCADOPAGO_ACCESS_TOKEN),
-        publicKeyPresent: Boolean(ENV.MERCADOPAGO_PUBLIC_KEY)
+        id: String(payment.id || paymentId),
+        status: payment.status,
+        statusPagamento: mapMercadoPagoStatus(payment.status),
+        transaction_amount: payment.transaction_amount,
+        external_reference: payment.external_reference || "",
+        preference_id: payment.preference_id || ""
       });
     }
     if (req.method === "POST" && url.pathname === "/api/payments/demo-approve") {
