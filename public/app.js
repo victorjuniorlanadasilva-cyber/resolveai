@@ -17,12 +17,14 @@ function apiFetch(path, options = {}) {
 const categories = [
   ["❤️", "Amor e Relacionamentos"], ["🔮", "Espiritualidade"], ["💼", "Trabalho e Emprego"],
   ["💰", "Finanças"], ["🏢", "Negócios"], ["🍽️", "Restaurantes"], ["📚", "Estudos"],
-  ["💻", "Tecnologia"], ["🏠", "Casa e Família"], ["❓", "Outros"]
+  ["💻", "Tecnologia"], ["🏠", "Casa e Família"], ["☕", "Problemas do Dia a Dia"], ["❓", "Outros"]
 ];
 const channels = [["📱", "WhatsApp", "Receba no seu WhatsApp"], ["📧", "E-mail", "Receba no seu e-mail"], ["📲", "Pelo aplicativo", "Receba por aqui no app"]];
 let state = JSON.parse(localStorage.getItem("resolveai_state") || "{}");
 let adminItems = [];
 let selectedAdmin = null;
+let trackItems = [];
+const FEATURED_KEY = "resolveai_featured_categories";
 
 function getClientId() {
   let clientId = localStorage.getItem("resolveai_client_id");
@@ -35,7 +37,17 @@ function getClientId() {
 function saveState() { localStorage.setItem("resolveai_state", JSON.stringify(state)); }
 function money(value) { return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 function dt(value) { return value ? new Date(value).toLocaleString("pt-BR") : "-"; }
-function prazo(plan) { return plan === "Prioritario" ? "Ate 2 horas" : "Ate 24 horas"; }
+function textKey(value) { return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
+function planValue(plan) { return plan === "Prioritario" ? 9.99 : 2.99; }
+function prazo(plan) { return plan === "Prioritario" ? "Ate 1 hora" : "Ate 24 horas"; }
+function getFeaturedCategories() {
+  try { return JSON.parse(localStorage.getItem(FEATURED_KEY) || "[]"); } catch { return []; }
+}
+function saveFeaturedCategories(items) { localStorage.setItem(FEATURED_KEY, JSON.stringify(items)); }
+function orderedCategories() {
+  const featured = getFeaturedCategories();
+  return [...categories].sort((a, b) => Number(featured.includes(b[1])) - Number(featured.includes(a[1])));
+}
 function step(label, back = true) {
   return `<div class="topbar">${back ? `<button class="icon-btn" onclick="goBack()" aria-label="Voltar">‹</button>` : "<span></span>"}<div class="step-pill">${label}</div><span></span></div>`;
 }
@@ -60,14 +72,14 @@ function welcome() {
     </div>
     <img class="hero-img" src="/assets/welcome-people.png" alt="Pessoas usando o ResolveAi">
     <button class="btn" onclick="render('category')">ENTRAR</button>
-    <div class="bottom"><button class="btn secondary" onclick="render('track')">Acompanhar solicitação</button></div>
+    <div class="bottom"><button class="btn secondary" onclick="render('track')">Minhas Solicitações</button></div>
   `);
 }
 
 function category() {
   phone(`${step("2. Escolha a categoria")}
     <h2 class="screen-title">Qual tipo de problema você deseja resolver?</h2>
-    <div class="list">${categories.map(([icon, name]) => `<button class="choice-card" onclick="pickCategory('${name}')"><span class="emoji">${icon}</span><strong>${name}</strong><span class="chev">›</span></button>`).join("")}</div>
+    <div class="list">${orderedCategories().map(([icon, name]) => `<button class="choice-card" onclick="pickCategory('${name}')"><span class="emoji">${icon}</span><strong>${name}</strong><span class="chev">›</span></button>`).join("")}</div>
   `);
 }
 function pickCategory(name) { state.categoria = name; saveState(); render("problem"); }
@@ -85,12 +97,12 @@ function priority() {
   phone(`${step("4. Escolha seu prazo")}
     <h2 class="screen-title">Escolha seu prazo de atendimento</h2>
     <p class="screen-copy">Você escolhe a prioridade. Nós damos o nosso melhor.</p>
-    <section class="plan-card"><div class="plan-head">🟢 Gratuito</div><ul><li>Sem custo</li><li>Proposta de solução em até 24 horas</li></ul><button class="btn secondary" onclick="pickPlan('Gratuito')">Continuar Gratuito</button></section>
-    <section class="plan-card gold-card"><div class="plan-head">⭐ Prioritário</div><ul><li>Atendimento prioritário</li><li>Proposta de solução em até 2 horas</li></ul><div class="price">R$ 9,99</div><button class="btn gold" onclick="pickPlan('Prioritario')">Atendimento Prioritário</button></section>
+    <section class="plan-card"><div class="plan-head">🟢 Normal</div><ul><li>Atendimento normal</li><li>Proposta de solução em até 24 horas</li></ul><div class="price">R$ 2,99</div><button class="btn secondary" onclick="pickPlan('Normal')">Escolher Normal</button></section>
+    <section class="plan-card gold-card"><div class="plan-head">⭐ Prioritário</div><ul><li>Atendimento prioritário</li><li>Proposta de solução em até 1 hora</li></ul><div class="price">R$ 9,99</div><button class="btn gold" onclick="pickPlan('Prioritario')">Atendimento Prioritário</button></section>
     <div class="progress" style="--p:54%"><span></span></div>
   `);
 }
-function pickPlan(plan) { state.plano = plan; saveState(); render(plan === "Prioritario" ? "payment" : "channel"); }
+function pickPlan(plan) { state.plano = plan; saveState(); render("payment"); }
 
 async function payment() {
   if (!state.tempRequest) {
@@ -100,9 +112,9 @@ async function payment() {
   }
   phone(`${step("Pagamento")}
     <section class="payment-card details">
-      <h2 class="screen-title">Atendimento Prioritário</h2>
-      <p class="screen-copy">Receba a proposta de solução em até 2 horas.</p>
-      <div class="price">R$ 9,99</div>
+      <h2 class="screen-title">Atendimento ${state.plano === "Prioritario" ? "Prioritário" : "Normal"}</h2>
+      <p class="screen-copy">Receba a proposta de solução em ${state.plano === "Prioritario" ? "até 1 hora" : "até 24 horas"}.</p>
+      <div class="price">${money(planValue(state.plano))}</div>
       <button class="btn gold" id="mercadoPagoButton" onclick="requestMercadoPagoPreference()">Pagar com Mercado Pago</button>
       <div id="payError"></div>
     </section>
@@ -169,7 +181,7 @@ function about() {
 }
 
 async function createRequest(temporary = false) {
-  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente Prioritario", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "" };
+  const payload = { clientId: getClientId(), categoria: state.categoria, problema: state.problema, plano: state.plano, canalResposta: state.canalResposta || "Pelo aplicativo", nome: state.nome || "Cliente", cidade: state.cidade || "A definir", whatsapp: state.whatsapp || "", email: state.email || "" };
   const res = await apiFetch("/api/solicitacoes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!res.ok) { alert("Não foi possível criar a solicitação."); return null; }
   return res.json();
@@ -209,9 +221,12 @@ function row(a, b) { return `<div class="detail-row"><span>${a}</span><strong>${
 async function track() {
   const res = await apiFetch(`/api/solicitacoes?clientId=${encodeURIComponent(getClientId())}`);
   const items = res.ok ? await res.json() : [];
-  phone(`${step("8. Acompanhar solicitação")}
-    <h2 class="screen-title">Acompanhar sua solicitação</h2>
+  trackItems = items;
+  const hasSolution = items.some((item) => item.respostaAdmin);
+  phone(`${step("8. Minhas Solicitações")}
+    <h2 class="screen-title">Minhas Solicitações</h2>
     <p class="screen-copy">Este aparelho mostra apenas as solicitações enviadas por ele.</p>
+    ${hasSolution ? `<div class="response-box"><strong>Você possui uma solução disponível.</strong></div>` : ""}
     <div class="list">${items.length ? items.map(trackCard).join("") : `<div class="notice">Nenhuma solicitação encontrada neste aparelho.</div>`}</div>
     <section class="info-card details" style="margin-top:14px">
       <strong>Consultar em outro aparelho</strong>
@@ -229,11 +244,22 @@ async function track() {
 
 function trackCard(item) {
   return `<section class="info-card details">
-    ${item.respostaAdmin ? `<div class="response-box"><strong>Resposta disponível!</strong><br>Confira abaixo a proposta de solução.</div>` : ""}
     <span class="subtle">Protocolo</span><div class="protocol">${item.protocolo}</div>
-    ${row("Categoria", item.categoria)}${row("Plano", item.plano)}${row("Canal", item.canalResposta)}${row("Status", item.status)}${row("Prazo previsto", prazo(item.plano))}${row("Data", dt(item.dataCriacao))}
-    ${item.respostaAdmin ? `<div><strong>Proposta de solução</strong><p>${item.respostaAdmin}</p></div>` : `<div class="notice">Assim que tivermos uma resposta, vamos te avisar pelo canal escolhido.</div>`}
+    ${row("Categoria", item.categoria)}${row("Data", dt(item.dataCriacao))}${row("Status", item.status)}
+    ${item.respostaAdmin ? `<button class="btn secondary" onclick="showSolution('${item.id}')">Ver Solução</button>` : `<div class="notice">Assim que tivermos uma resposta, vamos te avisar pelo canal escolhido.</div>`}
   </section>`;
+}
+
+function showSolution(id) {
+  const item = trackItems.find((entry) => entry.id === id) || state.last || {};
+  phone(`${step("Solução")}
+    <section class="info-card details">
+      <span class="subtle">Protocolo</span><div class="protocol">${item.protocolo || "-"}</div>
+      ${row("Categoria", item.categoria)}${row("Status", item.status)}${row("Data", dt(item.dataResposta || item.dataCriacao))}
+      <div><strong>Proposta de solução</strong><p>${item.respostaAdmin || "Ainda não há solução disponível."}</p></div>
+    </section>
+    <div class="bottom"><button class="btn secondary" onclick="render('track')">Voltar</button></div>
+  `);
 }
 
 async function recoverRequest() {
@@ -263,7 +289,6 @@ async function recoverRequest() {
 function paymentReturn(kind) {
   if (kind === "success") {
     state.pagamentoAprovado = true;
-    state.plano = "Prioritario";
     saveState();
   }
   const config = {
@@ -271,7 +296,7 @@ function paymentReturn(kind) {
       pill: "Pagamento aprovado",
       icon: "✓",
       title: "Pagamento recebido!",
-      text: "Seu atendimento prioritário será liberado assim que a confirmação do Mercado Pago chegar ao ResolveAi.",
+      text: "Seu atendimento será liberado assim que a confirmação do Mercado Pago chegar ao ResolveAi.",
       action: "Acompanhar solicitação"
     },
     failure: {
@@ -333,19 +358,35 @@ function stats(items) {
   const now = new Date();
   const sameDay = (d) => new Date(d).toDateString() === now.toDateString();
   const within = (d, days) => (now - new Date(d)) / 86400000 <= days;
+  const paidItems = items.filter((i) => i.statusPagamento === "aprovado");
   const revenue = (arr) => arr.reduce((s, i) => s + Number(i.valorPago || 0), 0);
-  return { total: items.length, today: items.filter(i => sameDay(i.dataCriacao)).length, week: items.filter(i => within(i.dataCriacao, 7)).length, month: items.filter(i => within(i.dataCriacao, 31)).length, pending: items.filter(i => i.status === "Em análise").length, answered: items.filter(i => i.status === "Respondido").length, canceled: items.filter(i => i.status === "Cancelado").length, free: items.filter(i => i.plano === "Gratuito").length, paid: items.filter(i => i.plano === "Prioritario").length, revToday: revenue(items.filter(i => sameDay(i.dataCriacao))), revMonth: revenue(items.filter(i => within(i.dataCriacao, 31))), revTotal: revenue(items) };
+  return { total: items.length, today: items.filter(i => sameDay(i.dataCriacao)).length, week: items.filter(i => within(i.dataCriacao, 7)).length, month: items.filter(i => within(i.dataCriacao, 31)).length, pending: items.filter(i => textKey(i.status) === "em analise").length, answered: items.filter(i => textKey(i.status) === "respondido").length, canceled: items.filter(i => textKey(i.status) === "cancelado").length, normal: items.filter(i => i.plano === "Normal").length, priority: items.filter(i => i.plano === "Prioritario").length, revToday: revenue(paidItems.filter(i => sameDay(i.dataCriacao))), revMonth: revenue(paidItems.filter(i => within(i.dataCriacao, 31))), revTotal: revenue(paidItems) };
 }
 function topBy(key) {
   const counts = {};
   adminItems.forEach(i => counts[i[key] || "-"] = (counts[i[key] || "-"] || 0) + 1);
   return Object.entries(counts).sort((a,b) => b[1] - a[1])[0]?.[0] || "-";
 }
+function topList(key, limit = 3) {
+  const counts = {};
+  adminItems.forEach(i => counts[i[key] || "-"] = (counts[i[key] || "-"] || 0) + 1);
+  return Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, limit);
+}
+function featuredAdmin() {
+  const selected = getFeaturedCategories();
+  return `<section class="info-card details"><strong>Categorias em destaque</strong><p class="subtle">As categorias marcadas aparecem primeiro para o cliente neste navegador.</p><div class="featured-grid">${categories.map(([icon, name]) => `<button class="choice-card ${selected.includes(name) ? "selected" : ""}" onclick="toggleFeaturedCategory('${name}')"><span class="emoji">${icon}</span><strong>${name}</strong></button>`).join("")}</div></section>`;
+}
+function toggleFeaturedCategory(name) {
+  const selected = getFeaturedCategories();
+  const next = selected.includes(name) ? selected.filter((item) => item !== name) : [...selected, name];
+  saveFeaturedCategories(next);
+  adminDashboard();
+}
 function adminDashboard() {
   const s = stats(adminItems);
   $("#adminMain").innerHTML = `<div class="admin-head"><h1>Dashboard</h1><span class="badge">Visão geral</span></div><div class="metric-grid">
-    ${metric("Total de Solicitações", s.total)}${metric("Solicitações Hoje", s.today)}${metric("Solicitações Semana", s.week)}${metric("Solicitações Mês", s.month)}${metric("Pendentes", s.pending)}${metric("Respondidas", s.answered)}${metric("Canceladas", s.canceled)}${metric("Solicitações Gratuitas", s.free)}${metric("Solicitações Prioritárias", s.paid)}${metric("Receita Hoje", money(s.revToday))}${metric("Receita Mês", money(s.revMonth))}${metric("Receita Total", money(s.revTotal))}
-  </div><h2 class="section-title">Indicadores</h2><div class="metric-grid">${metric("Categoria mais procurada", topBy("categoria"))}${metric("Cidade com mais solicitações", topBy("cidade"))}${metric("Canal mais utilizado", topBy("canalResposta"))}${metric("Plano mais utilizado", topBy("plano"))}</div><h2 class="section-title">Gráficos</h2><div class="chart-grid">${["categoria","cidade","plano","status"].map(k => `<div class="chart-card"><strong>${labelChart(k)}</strong><canvas data-chart="${k}"></canvas></div>`).join("")}</div>`;
+    ${metric("Quantidade de solicitações", s.total)}${metric("Solicitações Hoje", s.today)}${metric("Solicitações Semana", s.week)}${metric("Solicitações Mês", s.month)}${metric("Pendentes", s.pending)}${metric("Respondidas", s.answered)}${metric("Canceladas", s.canceled)}${metric("Solicitações Normais", s.normal)}${metric("Solicitações Prioritárias", s.priority)}${metric("Receita do dia", money(s.revToday))}${metric("Receita do mês", money(s.revMonth))}${metric("Receita total", money(s.revTotal))}
+  </div>${adminItems.length ? "" : `<div class="notice">Nenhuma solicitação encontrada.</div>`}<h2 class="section-title">Indicadores</h2><div class="metric-grid">${metric("Categoria mais procurada", topBy("categoria"))}${metric("Cidade com mais solicitações", topBy("cidade"))}${metric("Canal mais utilizado", topBy("canalResposta"))}${metric("Plano mais utilizado", topBy("plano"))}</div><h2 class="section-title">Top 3 categorias</h2><div class="metric-grid">${topList("categoria").length ? topList("categoria").map(([name, value]) => metric(name, `${value} solicitações`)).join("") : metric("Categorias", "Nenhuma solicitação encontrada.")}</div>${featuredAdmin()}<h2 class="section-title">Gráficos</h2><div class="chart-grid">${["categoria","cidade","plano","status"].map(k => `<div class="chart-card"><strong>${labelChart(k)}</strong><canvas data-chart="${k}"></canvas></div>`).join("")}</div>`;
   document.querySelectorAll("canvas[data-chart]").forEach(drawChart);
 }
 function metric(name, value) { return `<div class="metric"><span>${name}</span><strong>${value}</strong></div>`; }
@@ -371,14 +412,20 @@ function drawChart(canvas) {
   });
 }
 function adminRequests() {
-  $("#adminMain").innerHTML = `<div class="admin-head"><h1>Solicitações</h1><span class="badge">${adminItems.length} registros</span></div><div class="filters">${["Data Inicial","Data Final","Pesquisar por Dia","Cidade","Categoria","Plano","Status","Nome","Protocolo"].map((p,i)=>`<input id="f${i}" placeholder="${p}" oninput="filterTable()">`).join("")}</div><div id="requestArea"></div>`;
+  $("#adminMain").innerHTML = `<div class="admin-head"><h1>Solicitações</h1><div class="actions"><span class="badge">${adminItems.length} registros</span><button class="btn secondary" onclick="clearMockData()">Limpar dados fictícios</button></div></div><div class="filters">${["Data Inicial","Data Final","Pesquisar por Dia","Cidade","Categoria","Plano","Status","Nome","Protocolo"].map((p,i)=>`<input id="f${i}" placeholder="${p}" oninput="filterTable()">`).join("")}</div><div id="requestArea"></div>`;
   filterTable();
 }
 function filterTable() {
   const terms = Array.from(document.querySelectorAll(".filters input")).map(i => i.value.toLowerCase()).filter(Boolean);
   let items = adminItems.filter(i => terms.every(t => JSON.stringify(i).toLowerCase().includes(t)));
   items = items.sort((a,b) => (b.plano === "Prioritario") - (a.plano === "Prioritario") || new Date(b.dataCriacao) - new Date(a.dataCriacao));
-  $("#requestArea").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Protocolo</th><th>Nome</th><th>Cidade</th><th>Categoria</th><th>Plano</th><th>Canal</th><th>Data</th><th>Status</th></tr></thead><tbody>${items.map(i => `<tr onclick="adminDetail('${i.id}')"><td>${i.protocolo}</td><td>${i.nome}</td><td>${i.cidade}</td><td>${i.categoria}</td><td><span class="badge ${i.plano==="Prioritario"?"gold":""}">${i.plano === "Prioritario" ? "⭐ " : "🟢 "}${i.plano}</span></td><td>${i.canalResposta}</td><td>${dt(i.dataCriacao)}</td><td>${i.status}</td></tr>`).join("")}</tbody></table></div>`;
+  $("#requestArea").innerHTML = items.length ? `<div class="table-wrap"><table><thead><tr><th>Protocolo</th><th>Nome</th><th>Cidade</th><th>Categoria</th><th>Plano</th><th>Canal</th><th>Data</th><th>Status</th></tr></thead><tbody>${items.map(i => `<tr onclick="adminDetail('${i.id}')"><td>${i.protocolo}</td><td>${i.nome}</td><td>${i.cidade}</td><td>${i.categoria}</td><td><span class="badge ${i.plano==="Prioritario"?"gold":""}">${i.plano === "Prioritario" ? "⭐ " : "🟢 "}${i.plano}</span></td><td>${i.canalResposta}</td><td>${dt(i.dataCriacao)}</td><td>${i.status}</td></tr>`).join("")}</tbody></table></div>` : `<div class="notice">Nenhuma solicitação encontrada.</div>`;
+}
+
+function clearMockData() {
+  localStorage.removeItem("resolveai_state");
+  alert("Dados locais de demonstração limpos. O painel continuará exibindo somente solicitações reais do banco.");
+  loadAdmin("requests");
 }
 function adminDetail(id) {
   selectedAdmin = adminItems.find(i => i.id === id);

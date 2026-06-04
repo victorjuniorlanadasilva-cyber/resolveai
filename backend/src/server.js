@@ -162,7 +162,15 @@ async function protocol() {
 }
 
 function normalizePlan(plan) {
-  return plan === "Prioritario" ? "Prioritario" : "Gratuito";
+  return plan === "Prioritario" ? "Prioritario" : "Normal";
+}
+
+function paymentValueForPlan(plan) {
+  return plan === "Prioritario" ? 9.99 : 2.99;
+}
+
+function paymentDescriptionForPlan(plan) {
+  return plan === "Prioritario" ? "Proposta de solucao em ate 1 hora" : "Proposta de solucao em ate 24 horas";
 }
 
 function onlyDigits(value) {
@@ -267,12 +275,12 @@ async function createMercadoPagoPreference(solicitacao) {
   }
   const preference = {
     items: [{
-      id: "resolveai-prioritario",
-      title: `Atendimento prioritario ResolveAi ${solicitacao.protocolo}`,
-      description: "Proposta de solucao em ate 2 horas",
+      id: solicitacao.plano === "Prioritario" ? "resolveai-prioritario" : "resolveai-normal",
+      title: `Atendimento ${solicitacao.plano === "Prioritario" ? "prioritario" : "normal"} ResolveAi ${solicitacao.protocolo}`,
+      description: paymentDescriptionForPlan(solicitacao.plano),
       quantity: 1,
       currency_id: "BRL",
-      unit_price: 9.99
+      unit_price: paymentValueForPlan(solicitacao.plano)
     }],
     payer: {
       name: solicitacao.nome || undefined,
@@ -316,19 +324,20 @@ async function applyPaymentStatus(itemId, status, paymentId) {
   const statusPagamento = mapMercadoPagoStatus(status);
   const updates = {
     statusPagamento,
-    plano: statusPagamento === "aprovado" ? "Prioritario" : undefined,
     status: statusPagamento === "aprovado" ? "Em analise" : undefined,
-    valorPago: statusPagamento === "aprovado" ? 9.99 : statusPagamento === "recusado" ? 0 : undefined
   };
   await pool.query(
     `update solicitacoes
      set status_pagamento = $1,
          mercado_pago_payment_id = coalesce($2, mercado_pago_payment_id),
-         plano = coalesce($3, plano),
-         status = coalesce($4, status),
-         valor_pago = coalesce($5, valor_pago)
-     where id = $6`,
-    [updates.statusPagamento, paymentId ? String(paymentId) : null, updates.plano || null, updates.status || null, updates.valorPago ?? null, itemId]
+         status = coalesce($3, status),
+         valor_pago = case
+           when $1 = 'aprovado' then case when plano = 'Prioritario' then 9.99 else 2.99 end
+           when $1 = 'recusado' then 0
+           else valor_pago
+         end
+     where id = $4`,
+    [updates.statusPagamento, paymentId ? String(paymentId) : null, updates.status || null, itemId]
   );
 }
 
@@ -378,12 +387,12 @@ app.get("/api/routes", (_req, res) => res.json({
 app.get("/api/solicitacoes", asyncHandler(async (req, res) => {
   const clientId = String(req.query.clientId || "").trim();
   if (!clientId) return res.status(400).json({ error: "clientId obrigatorio" });
-  const result = await pool.query("select * from solicitacoes where client_id = $1 order by data_criacao desc", [clientId]);
+  const result = await pool.query("select * from solicitacoes where client_id = $1 and status_pagamento = 'aprovado' order by data_criacao desc", [clientId]);
   return res.json(result.rows.map(toClient));
 }));
 
 app.post("/api/solicitacoes/recuperar", asyncHandler(async (req, res) => {
-  const result = await pool.query("select * from solicitacoes where protocolo = $1", [String(req.body.protocolo || "").trim()]);
+  const result = await pool.query("select * from solicitacoes where protocolo = $1 and status_pagamento = 'aprovado'", [String(req.body.protocolo || "").trim()]);
   const item = result.rows.map(toClient).find((row) => contactMatches(row, req.body.contato));
   if (!item) return res.status(404).json({ error: "Solicitacao nao encontrada para esse protocolo e contato." });
   if (req.body.clientId) {
@@ -395,7 +404,7 @@ app.post("/api/solicitacoes/recuperar", asyncHandler(async (req, res) => {
 
 app.get("/api/solicitacoes/:protocolo", asyncHandler(async (req, res) => {
   const clientId = String(req.query.clientId || "").trim();
-  const result = await pool.query("select * from solicitacoes where protocolo = $1 and client_id = $2", [req.params.protocolo, clientId]);
+  const result = await pool.query("select * from solicitacoes where protocolo = $1 and client_id = $2 and status_pagamento = 'aprovado'", [req.params.protocolo, clientId]);
   const item = toClient(result.rows[0]);
   return item ? res.json(item) : res.status(404).json({ error: "Protocolo nao encontrado" });
 }));
@@ -416,9 +425,9 @@ app.post("/api/solicitacoes", asyncHandler(async (req, res) => {
     plano: plan,
     canalResposta: String(req.body.canalResposta || "Pelo aplicativo"),
     status: "Em analise",
-    statusPagamento: plan === "Prioritario" ? "aguardando_pagamento" : "aprovado",
+    statusPagamento: "aguardando_pagamento",
     respostaAdmin: "",
-    valorPago: plan === "Prioritario" ? 9.99 : 0
+    valorPago: 0
   };
   if (!item.clientId || !item.problema || !item.nome || !item.cidade) return res.status(400).json({ error: "Dados obrigatorios ausentes" });
   await pool.query(
@@ -458,7 +467,7 @@ async function loadPriorityPaymentRequest(req) {
   });
   const result = await pool.query("select * from solicitacoes where id = $1", [req.body.solicitacaoId]);
   const item = toClient(result.rows[0]);
-  if (!item || item.plano !== "Prioritario") throw httpError(404, "Solicitacao prioritaria nao encontrada");
+  if (!item || !["Normal", "Prioritario"].includes(item.plano)) throw httpError(404, "Solicitacao de pagamento nao encontrada");
   if (item.clientId && item.clientId !== String(req.body.clientId || "").trim()) throw httpError(403, "Acesso negado");
   return item;
 }
@@ -573,7 +582,7 @@ app.post("/api/admin/password", asyncHandler(async (req, res) => {
 }));
 
 app.get("/api/admin/solicitacoes", asyncHandler(async (_req, res) => {
-  const result = await pool.query("select * from solicitacoes order by case when plano='Prioritario' then 0 else 1 end, data_criacao desc");
+  const result = await pool.query("select * from solicitacoes where status_pagamento = 'aprovado' order by case when plano='Prioritario' then 0 else 1 end, data_criacao desc");
   return res.json(result.rows.map(toClient));
 }));
 

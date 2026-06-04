@@ -39,79 +39,8 @@ function writeDb(db) {
 }
 
 function seedDb() {
-  const base = new Date();
-  const mkDate = (days, h = 13) => {
-    const date = new Date(base);
-    date.setDate(date.getDate() - days);
-    date.setHours(h, 30, 0, 0);
-    return date.toISOString();
-  };
   writeDb({
-    solicitacoes: [
-      {
-        id: crypto.randomUUID(),
-        clientId: "demo-admin",
-        protocolo: "#202606030001",
-        nome: "Ana Ribeiro",
-        cidade: "Sao Paulo",
-        whatsapp: "(11) 99999-0001",
-        email: "ana@email.com",
-        contato: "(11) 99999-0001",
-        categoria: "Amor e Relacionamentos",
-        problema: "Estou em duvida sobre como conversar com meu parceiro sem transformar tudo em discussao.",
-        plano: "Prioritario",
-        canalResposta: "WhatsApp",
-        status: "Respondido",
-        statusPagamento: "aprovado",
-        respostaAdmin: "A principal proposta e iniciar uma conversa curta, com um unico tema, usando exemplos objetivos e combinando um proximo passo simples para os dois.",
-        valorPago: 9.99,
-        mercadoPagoPaymentId: "demo_pay_001",
-        dataCriacao: mkDate(0, 10),
-        dataResposta: mkDate(0, 12)
-      },
-      {
-        id: crypto.randomUUID(),
-        clientId: "demo-admin",
-        protocolo: "#202606020004",
-        nome: "Marcos Lima",
-        cidade: "Campinas",
-        whatsapp: "(19) 98888-1111",
-        email: "marcos@email.com",
-        contato: "(19) 98888-1111",
-        categoria: "Negocios",
-        problema: "Meu restaurante recebe movimento no almoco, mas o faturamento nao fecha no fim do mes.",
-        plano: "Gratuito",
-        canalResposta: "E-mail",
-        status: "Em análise",
-        statusPagamento: "aprovado",
-        respostaAdmin: "",
-        valorPago: 0,
-        mercadoPagoPaymentId: "",
-        dataCriacao: mkDate(1, 16),
-        dataResposta: ""
-      },
-      {
-        id: crypto.randomUUID(),
-        clientId: "demo-admin",
-        protocolo: "#202606010003",
-        nome: "Julia Costa",
-        cidade: "Rio de Janeiro",
-        whatsapp: "",
-        email: "julia@email.com",
-        contato: "julia@email.com",
-        categoria: "Estudos",
-        problema: "Nao consigo manter rotina para estudar depois do trabalho.",
-        plano: "Gratuito",
-        canalResposta: "Pelo aplicativo",
-        status: "Em análise",
-        statusPagamento: "aprovado",
-        respostaAdmin: "",
-        valorPago: 0,
-        mercadoPagoPaymentId: "",
-        dataCriacao: mkDate(2, 19),
-        dataResposta: ""
-      }
-    ],
+    solicitacoes: [],
     administradores: [
       {
         id: crypto.randomUUID(),
@@ -193,7 +122,15 @@ function protocol(db) {
 }
 
 function normalizePlan(plan) {
-  return plan === "Prioritario" ? "Prioritario" : "Gratuito";
+  return plan === "Prioritario" ? "Prioritario" : "Normal";
+}
+
+function paymentValueForPlan(plan) {
+  return plan === "Prioritario" ? 9.99 : 2.99;
+}
+
+function paymentDescriptionForPlan(plan) {
+  return plan === "Prioritario" ? "Proposta de solucao em ate 1 hora" : "Proposta de solucao em ate 24 horas";
 }
 
 function mercadoPagoBaseUrl() {
@@ -327,12 +264,12 @@ async function createMercadoPagoPreference(solicitacao) {
   const preference = {
     items: [
       {
-        id: "resolveai-prioritario",
-        title: `Atendimento prioritario ResolveAi ${solicitacao.protocolo}`,
-        description: "Proposta de solucao em ate 2 horas",
+        id: solicitacao.plano === "Prioritario" ? "resolveai-prioritario" : "resolveai-normal",
+        title: `Atendimento ${solicitacao.plano === "Prioritario" ? "prioritario" : "normal"} ResolveAi ${solicitacao.protocolo}`,
+        description: paymentDescriptionForPlan(solicitacao.plano),
         quantity: 1,
         currency_id: "BRL",
-        unit_price: 9.99
+        unit_price: paymentValueForPlan(solicitacao.plano)
       }
     ],
     payer: {
@@ -373,9 +310,8 @@ function applyPaymentStatus(item, status, paymentId) {
   item.statusPagamento = mapMercadoPagoStatus(status);
   item.mercadoPagoPaymentId = paymentId ? String(paymentId) : item.mercadoPagoPaymentId || "";
   if (item.statusPagamento === "aprovado") {
-    item.plano = "Prioritario";
     item.status = "Em análise";
-    item.valorPago = 9.99;
+    item.valorPago = paymentValueForPlan(item.plano);
   }
   if (item.statusPagamento === "recusado") {
     item.valorPago = 0;
@@ -428,14 +364,14 @@ async function api(req, res) {
       const clientId = String(url.searchParams.get("clientId") || "").trim();
       if (!clientId) return json(res, 400, { error: "clientId obrigatorio" });
       const items = db.solicitacoes
-        .filter((s) => s.clientId === clientId)
+        .filter((s) => s.clientId === clientId && s.statusPagamento === "aprovado")
         .sort((a, b) => new Date(b.dataCriacao) - new Date(a.dataCriacao));
       return json(res, 200, items);
     }
     if (req.method === "POST" && url.pathname === "/api/solicitacoes/recuperar") {
       const data = await body(req);
       const protocoloBusca = String(data.protocolo || "").trim();
-      const item = db.solicitacoes.find((s) => s.protocolo === protocoloBusca && contactMatches(s, data.contato));
+      const item = db.solicitacoes.find((s) => s.protocolo === protocoloBusca && s.statusPagamento === "aprovado" && contactMatches(s, data.contato));
       if (!item) return json(res, 404, { error: "Solicitacao nao encontrada para esse protocolo e contato." });
       if (data.clientId) {
         item.clientId = String(data.clientId).trim();
@@ -446,7 +382,7 @@ async function api(req, res) {
     if (req.method === "GET" && url.pathname.startsWith("/api/solicitacoes/")) {
       const protocolo = decodeURIComponent(url.pathname.split("/").pop());
       const clientId = String(url.searchParams.get("clientId") || "").trim();
-      const item = db.solicitacoes.find((s) => s.protocolo === protocolo && s.clientId === clientId);
+      const item = db.solicitacoes.find((s) => s.protocolo === protocolo && s.clientId === clientId && s.statusPagamento === "aprovado");
       return item ? json(res, 200, item) : json(res, 404, { error: "Protocolo nao encontrado" });
     }
     if (req.method === "POST" && url.pathname === "/api/solicitacoes") {
@@ -466,9 +402,9 @@ async function api(req, res) {
         plano: plan,
         canalResposta: String(data.canalResposta || "Pelo aplicativo"),
         status: "Em análise",
-        statusPagamento: plan === "Prioritario" ? "aguardando_pagamento" : "aprovado",
+        statusPagamento: "aguardando_pagamento",
         respostaAdmin: "",
-        valorPago: plan === "Prioritario" ? 9.99 : 0,
+        valorPago: 0,
         mercadoPagoPaymentId: "",
         dataCriacao: nowIso(),
         dataResposta: ""
@@ -496,7 +432,7 @@ async function api(req, res) {
     if (req.method === "POST" && url.pathname === "/api/payments/mercadopago/preference") {
       const data = await body(req);
       const item = db.solicitacoes.find((s) => s.id === data.solicitacaoId);
-      if (!item || item.plano !== "Prioritario") return json(res, 404, { error: "Solicitacao prioritaria nao encontrada" });
+      if (!item || !["Normal", "Prioritario"].includes(item.plano)) return json(res, 404, { error: "Solicitacao de pagamento nao encontrada" });
       if (item.clientId && item.clientId !== String(data.clientId || "").trim()) return json(res, 403, { error: "Acesso negado" });
       try {
         const preference = await createMercadoPagoPreference(item);
@@ -543,8 +479,8 @@ async function api(req, res) {
       if (!item) return json(res, 404, { error: "Solicitacao nao encontrada" });
       if (item.clientId && item.clientId !== String(data.clientId || "").trim()) return json(res, 403, { error: "Acesso negado" });
       item.statusPagamento = "aprovado";
-      item.plano = "Prioritario";
       item.status = "Em análise";
+      item.valorPago = paymentValueForPlan(item.plano);
       writeDb(db);
       return json(res, 200, item);
     }
@@ -591,7 +527,7 @@ async function api(req, res) {
       writeDb(db);
       return json(res, 200, { ok: true });
     }
-    if (req.method === "GET" && url.pathname === "/api/admin/solicitacoes") return json(res, 200, db.solicitacoes);
+    if (req.method === "GET" && url.pathname === "/api/admin/solicitacoes") return json(res, 200, db.solicitacoes.filter((s) => s.statusPagamento === "aprovado"));
     if (req.method === "PATCH" && url.pathname.startsWith("/api/admin/solicitacoes/")) {
       const id = url.pathname.split("/").pop();
       const data = await body(req);
